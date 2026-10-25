@@ -185,8 +185,12 @@ perl <mpich-build>/mymake/mymake_modules.pl --name=<variant> [--mpich=<checkout>
 - **STAMP.** Each tarball records the MPICH commit it was built from, the
   options, the compilers, and per component either the submodule commit or,
   for in-tree components, the git tree hash of its directory
-  (`git rev-parse HEAD:src/mpl`). At configure time mymake compares them with
-  the checkout:
+  (`git rev-parse HEAD:src/mpl`). A tree hash changes only when something
+  under that directory changes, so one tarball matches every branch that
+  leaves the component alone. On the checkout side mymake hashes the working
+  tree, so uncommitted edits count (`git add -A <dir>` into a temporary index,
+  then `git write-tree --prefix=<dir>/`; ignored generated files don't
+  count). At configure time mymake compares them with the checkout:
   - same: use the prebuilt component;
   - different, in-tree component: rebuild it in quick mode from the
     checkout's source, into the checkout's modules tree (seconds for mpl,
@@ -216,14 +220,13 @@ perl <mpich-build>/mymake/mymake_modules.pl --name=<variant> [--mpich=<checkout>
 - A checkout finds its modules through `$MODDIR` (used directly), else
   `$MODTARBALL`, else `../mpich-modules/modules-<variant>.tar.gz` (variant
   `gpu` with `--with-cuda`, else `cpu`), unpacked into the checkout.
+- On a tree-hash mismatch, an in-tree component is rebuilt automatically.
 - `mymake_modules.pl` writes to `mpich-modules/` next to the checkout by
   default. The old hzhou/mpich-modules repository will be retired, which
   frees the name.
 
 ## Open questions
 
-- On a tree-hash mismatch for an in-tree component: rebuild automatically
-  (proposed) or only warn?
 - Are saved per-variant args files enough, or should all variants be listed
   in one config file?
 
