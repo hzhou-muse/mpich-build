@@ -1,7 +1,9 @@
 subcode: config_init_romio
+    my $d = comp_dir("src/mpi/romio")
     $config_in = "$mymake_dir/config_templates/romioconf.h"
-    $config_out = "src/mpi/romio/adio/include/romioconf.h"
-    symlink "../../../libtool", "src/mpi/romio/libtool"
+    $config_out = "$d/adio/include/romioconf.h"
+    $if !$opts{srcdir}
+        symlink "../../../libtool", "src/mpi/romio/libtool"
 
 subcode: config_romio
     $call ac_init, ROMIO, $version, discuss@mpich.org, romio, http://www.mpich.org/
@@ -55,7 +57,7 @@ subcode: config_romio
         $confs{DEFINE_HAVE_MPI_GREQUEST} = "#define HAVE_MPI_GREQUEST 1"
         $confs{HAVE_MPI_INFO} = "#define HAVE_MPI_INFO"
         $confs{HAVE_MPI_DARRAY_SUBARRAY} = "#define HAVE_MPI_DARRAY_SUBARRAY"
-        autoconf_file("src/mpi/romio/include/mpio.h", \%confs)
+        autoconf_file(comp_dir("src/mpi/romio") . "/include/mpio.h", \%confs)
 
 subcode: make_romio
     my %conds
@@ -70,8 +72,13 @@ subcode: make_romio
         $special_targets{libromio_abi_la} = "\x24(LTCC) -DMPICH_BUILD_MPI_ABI"
     $else
         $conds{BUILD_MPICH_LIB} = 1
-    $autoconf_vars{mpl_includedir} = "-I../../mpl/include -I../../include"
+    # mpl and mpi.h, relative to romio (opts mpl_dir and mpi_includedir when
+    # romio is built on its own)
+    my $mpl = $opts{mpl_dir} || "../../mpl"
+    my $mpi_inc = $opts{mpi_includedir} || "../../include"
+    $autoconf_vars{mpl_includedir} = "-I$mpl/include -I$mpi_inc"
     $autoconf_vars{DEFINE_HAVE_MPI_GREQUEST}="#define HAVE_MPI_GREQUEST 1"
-    load_automake("src/mpi/romio/Makefile.am", \%conds)
-    dump_makefile("src/mpi/romio/Makefile")
+    my $d = comp_dir("src/mpi/romio")
+    load_automake("$d/Makefile.am", \%conds)
+    dump_makefile("$d/Makefile")
 

@@ -36,6 +36,11 @@ page: mymake_config
     $config = shift @ARGV
     $print -- mymake_config $config ...
 
+    # before config_init: a component may be configured outside the MPICH
+    # tree (opts srcdir); the empty line keeps the $case chain below from
+    # continuing load_opts' $if
+    $call load_opts
+
     $(for:a in $(config_cases))
         $case $config eq "$(a)"
             $call config_init_$(a)
@@ -43,7 +48,6 @@ page: mymake_config
         die "Usage: $0 [mpich]\n"
 
     $global %config_defines
-    $call load_opts
     $call init_config_defines
 
     $call get_file_in_t, mymake/args

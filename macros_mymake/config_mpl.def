@@ -1,9 +1,19 @@
+# Where a component's sources are, relative to the current directory: its
+# place in the MPICH tree by default, or opts srcdir (e.g. "." when the
+# component is built in its own directory, as a module).
+fncode: comp_dir($default)
+    $if $opts{srcdir}
+        return $opts{srcdir}
+    return $default
+
 subcode: config_init_mpl
+    my $d = comp_dir("src/mpl")
     $config_prefix = "mpl"
     $config_in = "$mymake_dir/config_templates/mplconfig.h"
-    $config_out = "src/mpl/include/mplconfig.h"
-    symlink "../../libtool", "src/mpl/libtool"
-    symlink "../../confdb", "src/mpl/confdb"
+    $config_out = "$d/include/mplconfig.h"
+    $if !$opts{srcdir}
+        symlink "../../libtool", "src/mpl/libtool"
+        symlink "../../confdb", "src/mpl/confdb"
 
 subcode: config_mpl
     $call ac_init, MPL, 0.1, -, mpl, -
@@ -72,7 +82,7 @@ subcode: config_mpl
         my %confs
         $confs{MPL_TIMER_TYPE} = "struct timespec"
         $confs{MPL_TIMER_KIND} = "MPL_TIMER_KIND__CLOCK_GETTIME"
-        autoconf_file("src/mpl/include/mpl_timer.h", \%confs)
+        autoconf_file(comp_dir("src/mpl") . "/include/mpl_timer.h", \%confs)
 
 #---------------------------------------- 
 subcode: make_mpl
@@ -94,15 +104,18 @@ subcode: make_mpl
             $(elif:a=ze)
                 $make_vars{LIBS} .= " -lze_loader"
     # $conds{MPL_HAVE_ZE} = 1
-    load_automake("src/mpl/Makefile.am", \%conds)
+    my $d = comp_dir("src/mpl")
+    load_automake("$d/Makefile.am", \%conds)
     @programs=()
-    dump_makefile("src/mpl/Makefile")
+    dump_makefile("$d/Makefile")
 
 #---------------------------------------- 
 subcode: config_init_pmi
+    my $d = comp_dir("src/pmi")
     $config_in = "$mymake_dir/config_templates/pmi_config.h"
-    $config_out = "src/pmi/include/pmi_config.h"
-    symlink "../../libtool", "src/pmi/libtool"
+    $config_out = "$d/include/pmi_config.h"
+    $if !$opts{srcdir}
+        symlink "../../libtool", "src/pmi/libtool"
 
 subcode: config_pmi
     $call ac_init, PMI, 1.2, -, pmi, -
@@ -119,14 +132,17 @@ subcode: make_pmi
 
     my %conds
     $conds{EMBEDDED_MODE} = 1
-    $autoconf_vars{mpl_includedir} = "-I../mpl/include -I../include"
+    # mpl, relative to pmi (opts mpl_dir when pmi is built on its own)
+    my $mpl = $opts{mpl_dir} || "../mpl"
+    $autoconf_vars{mpl_includedir} = "-I$mpl/include -I../include"
 
     push @extra_make_rules, "test_pmi1: examples/test_pmi1.o libpmi.la"
-    push @extra_make_rules, "\t\@echo LTLD \$@ && \x24(LTLD) -o \$@ \$^ ../mpl/libmpl.la"
+    push @extra_make_rules, "\t\@echo LTLD \$@ && \x24(LTLD) -o \$@ \$^ $mpl/libmpl.la"
 
-    load_automake("src/pmi/Makefile.am", \%conds)
+    my $d = comp_dir("src/pmi")
+    load_automake("$d/Makefile.am", \%conds)
     @programs=()
-    dump_makefile("src/pmi/Makefile")
+    dump_makefile("$d/Makefile")
 
 #---------------------------------------- 
 subcode: config_init_opa
