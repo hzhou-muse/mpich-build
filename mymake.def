@@ -9,6 +9,7 @@ include: macros_mymake/bindings.def
 include: macros_mymake/hydra.def
 include: macros_mymake/gforker.def
 include: macros_mymake/libtool.def
+include: macros_mymake/modules.def
 
 output_dir: ./mymake
 

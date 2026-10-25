@@ -30,35 +30,21 @@ subcode: parse_args
         $opts{do_pmpi} = 1
 
     subcode: set_moddir
-        my $mod_tarball
-        $if $ENV{MODTARBALL}
-            $mod_tarball = $ENV{MODTARBALL}
-        $(for:a in modules,modules-yaksa-new,modules-gpu)
-            $elif -e "$(a).tar.gz"
-                $mod_tarball = "$(a).tar.gz"
-        # --
-        # my $cmd = "git log --after=\"2021-2-16\" |grep 'Yaksa has been updated to use intptr_t'"
-        $if $mod_tarball =~/modules\.tar\.gz$/
-            my $base_tarball = $mod_tarball
-            $if $opts{"with-cuda"} && $mod_tarball
-                $mod_tarball=~s/modules[^\/]*\.tar\.gz$/modules-gpu.tar.gz/
-            $elif $opts{"with-hip"} && $mod_tarball
-                $mod_tarball=~s/modules[^\/]*\.tar\.gz$/modules-hip.tar.gz/
-            $if !-e $mod_tarball
-                $print "$mod_tarball not found! Using $base_tarball."
-                $mod_tarball = $base_tarball
-        # --------------
+        # MODDIR is used as it is (shared); otherwise unpack a tarball into
+        # mymake/, once (see find_mod_tarball in modules.def)
         $if $ENV{MODDIR}
             $opts{moddir} = Cwd::abs_path($ENV{MODDIR})
+            $opts{moddir_shared} = 1
         $elif -e "mymake/skip_tarball"
             $opts{moddir} = "$pwd/mymake"
-        $elif -e $mod_tarball
+        $else
+            my $mod_tarball = find_mod_tarball()
             $opts{moddir} = "$pwd/mymake"
             $call do_cmd, mkdir -p $opts{moddir}
             $call do_cmd, tar -C $opts{moddir} -xf $mod_tarball
             system "touch mymake/skip_tarball"
-        $else
-            die "moddir not set: set MODTARBALL to the modules tarball (or MODDIR to an unpacked one)\n"
+        $(if:_pagename=mymake)
+            check_modules()
 
     subcode: set_prefix
         $if !$opts{prefix}

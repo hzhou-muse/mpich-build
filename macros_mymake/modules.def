@@ -55,9 +55,16 @@ subcode: recipe_hwloc
     run("make -j$opts{jobs}")
 
 subcode: recipe_yaksa
-    run("sh autogen.sh --pup-max-nesting=2")
-    run("./configure --enable-embedded --enable-debug $extra")
+    $call yaksa_autogen
+    $call yaksa_configure, $extra
     run("make -j$opts{jobs}")
+
+# shared with checkout rebuilds (rebuild_yaksa)
+subcode: yaksa_autogen
+    run("sh autogen.sh --pup-max-nesting=2")
+
+subcode: yaksa_configure(extra)
+    run("./configure --enable-embedded --enable-debug $(extra)")
 
 subcode: recipe_libfabric
     run("sh autogen.sh")
@@ -99,3 +106,136 @@ subcode: open_a(file)
     open Out, ">>$(file)" or die "Can't append $(file): $!\n"
     BLOCK
     close Out
+
+# -- which variant a build wants, and where its tarball is ----------
+fncode: modules_variant
+    $if $opts{"with-cuda"}
+        return "gpu"
+    $elif $opts{"with-hip"}
+        return "hip"
+    return "cpu"
+
+# MODTARBALL, else modules.tar.gz in the checkout, else
+# ../mpich-modules/modules-<variant>.tar.gz. A given tarball named
+# modules[-<name>].tar.gz is swapped for modules-<variant>.tar.gz next to it
+# when that exists.
+fncode: find_mod_tarball
+    my $variant = modules_variant()
+    my $given = $ENV{MODTARBALL}
+    $if !$given and -e "modules.tar.gz"
+        $given = "modules.tar.gz"
+    my @cands
+    $if $given
+        $if $given=~/^(.*\/)?modules(-\w+)?\.tar\.gz$/
+            my $dir = $1
+            push @cands, "${dir}modules-$variant.tar.gz"
+            $if $variant eq "cpu"
+                push @cands, "${dir}modules.tar.gz"
+        push @cands, $given
+    $else
+        my $parent = $pwd
+        $parent =~ s/\/[^\/]+$//
+        push @cands, "$parent/mpich-modules/modules-$variant.tar.gz"
+    $foreach $t in @cands
+        $if -e $t
+            return $t
+    die "no modules tarball (looked for @cands): set MODTARBALL, or MODDIR to an unpacked one, or build one with mymake_modules.pl --name=$variant\n"
+
+# -- STAMP -----------------------------------------------------------
+fncode: read_stamp($file)
+    $if !-f $file
+        return undef
+    my %h
+    &call open_r, $file
+        $if /^(\S+): ?(.*)/
+            $h{$1} = $2
+    return \%h
+
+fncode: write_stamp($file, $h)
+    &call open_w, $file
+        $foreach $k in sort keys %$h
+            print Out "$k: $h->{$k}\n"
+
+# hash of $dir in $repo as in the working tree, so uncommitted edits count;
+# ignored (generated) files don't
+fncode: tree_hash($repo, $dir, $tmpdir)
+    my $idx = "$tmpdir/.index-$$"
+    unlink $idx
+    my $t = `GIT_INDEX_FILE=$idx git -C $repo add -A -- $dir && GIT_INDEX_FILE=$idx git -C $repo write-tree --prefix=$dir/`
+    unlink $idx
+    chomp $t
+    $if $t!~/^[0-9a-f]+$/
+        die "can't hash $repo/$dir\n"
+    return $t
+
+# -- in-tree components: follow the checkout ---------------------------
+# copy the files of $repo/$dir (tracked and untracked) that differ from $dst
+fncode: sync_tree($repo, $dir, $dst)
+    $use File::Compare
+    $use File::Copy
+    $use File::Path qw(make_path)
+    my @changed
+    my $list = `git -C $repo ls-files -co --exclude-standard -- $dir`
+    $foreach $f in split /\n/, $list
+        my $rel = substr($f, length($dir) + 1)
+        my ($src, $to) = ("$repo/$f", "$dst/$rel")
+        $if !-e $to or compare($src, $to) != 0
+            $if $to=~/^(.*)\//
+                make_path($1)
+            copy($src, $to) or die "copy $src: $!\n"
+            chmod((stat $src)[2] & 07777, $to)
+            push @changed, $rel
+    return @changed
+
+# Bring $moddir/yaksa up to date with the checkout's yaksa and rebuild it in
+# full (the tarball has no objects); autogen and configure run again only
+# when their inputs changed or extra options are given.
+fncode: rebuild_yaksa($repo, $moddir, $options, $extra, $jobs)
+    $run_log = "$moddir/yaksa-rebuild.log"
+    unlink $run_log
+    my @changed = sync_tree($repo, "$(yaksa_dir)", "$moddir/yaksa")
+    my $n = @changed
+    $print "  yaksa: $n files updated from the checkout, log in $run_log"
+    my @regen = grep { /(^|\/)(configure\.ac|Makefile\.am|autogen\.sh|genpup\.py|[^\/]+\.mk|[^\/]+\.m4)$/ } @changed
+    chdir "$moddir/yaksa" or die "chdir $moddir/yaksa: $!\n"
+    $if @regen
+        $call yaksa_autogen
+    $if @regen or $extra
+        $call yaksa_configure, $options $extra
+    run("make clean")
+    run("make -j$jobs")
+    chdir $pwd
+
+# Compare the modules tree with the checkout: warn about the variant and
+# submodule commits, rebuild yaksa when it differs.
+fncode: check_modules
+    my $moddir = $opts{moddir}
+    my $stamp = read_stamp("$moddir/modules.stamp")
+    $if !$stamp
+        $print "modules: no modules.stamp in $moddir (older tarball), skipping checks"
+        return
+    my $want = modules_variant()
+    $if $stamp->{variant} ne $want
+        $print "WARNING: the modules are variant $stamp->{variant}, this build wants $want ($moddir)"
+    $if system("git -C $pwd rev-parse --git-dir >/dev/null 2>&1") != 0
+        return
+    $foreach $c in qw(hwloc libfabric ucx mydef_boot)
+        my $have = $stamp->{"key-$c"}
+        my $t = `git -C $pwd ls-tree HEAD modules/$c`
+        $if $t=~/commit\s+([0-9a-f]+)/ and $have and $1 ne $have
+            $print "WARNING: modules/$c: the modules have $have, the checkout records $1"
+    my $h = tree_hash($pwd, "$(yaksa_dir)", $moddir)
+    $if $stamp->{"key-yaksa"} and $h ne $stamp->{"key-yaksa"}
+        $if $opts{moddir_shared}
+            $print "WARNING: yaksa differs from the checkout; not rebuilding it in the shared MODDIR $moddir"
+            return
+        $print "modules: yaksa differs from the checkout, rebuilding it in $moddir/yaksa"
+        my $jobs = `nproc`
+        chomp $jobs
+        my $ok = eval { rebuild_yaksa($pwd, $moddir, $stamp->{"options-yaksa"}, "", $jobs); 1 }
+        $if !$ok
+            print $@
+            system "tail -15 $moddir/yaksa-rebuild.log"
+            die "yaksa rebuild failed\n"
+        $stamp->{"key-yaksa"} = $h
+        write_stamp("$moddir/modules.stamp", $stamp)

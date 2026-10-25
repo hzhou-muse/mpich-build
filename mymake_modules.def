@@ -6,6 +6,9 @@ output_dir: ./mymake
 # Build a modules tarball for one preset variant from an MPICH checkout:
 #     mymake_modules.pl --name=cpu|gpu|hip [--mpich=<checkout>] [--out=<dir>]
 #                       [-j=N] [--only=hwloc,yaksa] [--force]
+# or, inside a checkout whose modules are unpacked in mymake/, rebuild one
+# component from the checkout's source, with extra configure options:
+#     mymake_modules.pl --rebuild=yaksa [configure options]
 # Components build in <out>/<name>/<component>/ and are kept; a component is
 # rebuilt only when its source (commit or tree hash) or options change.
 
@@ -15,6 +18,9 @@ page: mymake_modules
     $global @components = qw(libtool hwloc yaksa libfabric ucx mydef_boot)
 
     $call parse_args_modules
+    $if $opts{rebuild}
+        $call rebuild_in_checkout
+        exit 0
     $call detect_host
     $call set_variant
     $call get_sources
@@ -26,27 +32,32 @@ subcode: parse_args_modules
     $opts{mpich} = $pwd
     $opts{jobs} = `nproc`
     chomp $opts{jobs}
+    $global @extra_args
     $foreach $a in @ARGV
-        $if $a=~/^--?(name|mpich|out|only)=(.*)/
+        $if $a=~/^--?(name|mpich|out|only|rebuild)=(.*)/
             $opts{$1} = $2
         $elif $a=~/^-j=?(\d+)$/
             $opts{jobs} = $1
         $elif $a eq "--force"
             $opts{force} = 1
         $else
-            die "Usage: $0 --name=cpu|gpu|hip [--mpich=<checkout>] [--out=<dir>] [-j=N] [--only=a,b] [--force]\n"
-    $opts{mpich} = Cwd::abs_path($opts{mpich})
-    $if !-f "$opts{mpich}/maint/version.m4"
-        die "$opts{mpich} is not an MPICH checkout\n"
-    $if !$opts{out}
-        $opts{out} = $opts{mpich}
-        $opts{out} =~ s/\/[^\/]+$//
-        $opts{out} .= "/mpich-modules"
-    system "mkdir -p $opts{out}/$opts{name} $opts{out}/src"
-    $opts{out} = Cwd::abs_path($opts{out})
-    $global $variant_dir
-    $variant_dir = "$opts{out}/$opts{name}"
-    $print variant $opts{name}: $variant_dir
+            push @extra_args, $a
+    $if @extra_args and !$opts{rebuild}
+        die "Usage: $0 --name=cpu|gpu|hip [--mpich=<checkout>] [--out=<dir>] [-j=N] [--only=a,b] [--force]\n       $0 --rebuild=yaksa [configure options]\n"
+    # the rest is for building a variant
+    $if !$opts{rebuild}
+        $opts{mpich} = Cwd::abs_path($opts{mpich})
+        $if !-f "$opts{mpich}/maint/version.m4"
+            die "$opts{mpich} is not an MPICH checkout\n"
+        $if !$opts{out}
+            $opts{out} = $opts{mpich}
+            $opts{out} =~ s/\/[^\/]+$//
+            $opts{out} .= "/mpich-modules"
+        system "mkdir -p $opts{out}/$opts{name} $opts{out}/src"
+        $opts{out} = Cwd::abs_path($opts{out})
+        $global $variant_dir
+        $variant_dir = "$opts{out}/$opts{name}"
+        $print variant $opts{name}: $variant_dir
 
 # -- sources: commits recorded by the checkout -----------------------
 subcode: get_sources
@@ -55,7 +66,7 @@ subcode: get_sources
     $(for:a in $(module_submodules))
         $call get_submodule, $(a)
     $src_dir{yaksa} = "$mpich/$(yaksa_dir)"
-    $src_key{yaksa} = tree_hash($mpich, "$(yaksa_dir)")
+    $src_key{yaksa} = tree_hash($mpich, "$(yaksa_dir)", "$opts{out}/src")
     my $lt = `libtoolize --version | head -1`
     chomp $lt
     $src_key{libtool} = $lt
@@ -83,17 +94,6 @@ subcode: get_sources
         system("git -C $src checkout -q -B build $commit") == 0 or die "checkout $(c) $commit failed\n"
         $src_dir{$(c)} = $src
         $src_key{$(c)} = $commit
-
-# hash of the directory as in the working tree, so uncommitted edits count
-fncode: tree_hash($repo, $dir)
-    my $idx = "$opts{out}/src/.index-$$"
-    unlink $idx
-    my $t = `GIT_INDEX_FILE=$idx git -C $repo add -A -- $dir && GIT_INDEX_FILE=$idx git -C $repo write-tree --prefix=$dir/`
-    unlink $idx
-    chomp $t
-    $if $t!~/^[0-9a-f]+$/
-        die "can't hash $repo/$dir\n"
-    return $t
 
 # -- build -----------------------------------------------------------
 subcode: build_components
@@ -182,9 +182,50 @@ subcode: pack_tarball
     my $tar = "$opts{out}/modules-$opts{name}.tar"
     unlink $tar, "$tar.gz"
     chdir $variant_dir or die "chdir $variant_dir: $!\n"
+    $call write_modules_stamp
     my @others = grep { $_ ne "ucx" } @components
+    push @others, "modules.stamp"
     system("tar -cf $tar --exclude=.git --exclude=.mymake_built --exclude='*.o' @others") == 0 or die "tar failed\n"
     system("tar -rf $tar --exclude=.git --exclude=.mymake_built ucx") == 0 or die "tar failed\n"
     system("gzip $tar") == 0 or die "gzip failed\n"
     chdir $pwd
     $print "--> $tar.gz"
+
+# what the tarball was built from, for mymake's checks (check_modules)
+subcode: write_modules_stamp
+    my %stamp
+    $stamp{variant} = $opts{name}
+    $stamp{mpich} = `git -C $opts{mpich} rev-parse HEAD`
+    $stamp{cc} = `\${CC:-gcc} --version | head -1`
+    $stamp{fc} = `\${FC:-gfortran} --version | head -1`
+    $stamp{date} = `date -Iseconds`
+    $foreach $k in keys %stamp
+        chomp $stamp{$k}
+    $foreach $c in @components
+        $stamp{"key-$c"} = $src_key{$c}
+        $stamp{"options-$c"} = $comp_opts{$c}
+    write_stamp("$variant_dir/modules.stamp", \%stamp)
+
+# --rebuild=<component> inside a checkout: its own modules tree only
+subcode: rebuild_in_checkout
+    $if $opts{rebuild} ne "yaksa"
+        die "--rebuild: only yaksa for now\n"
+    $if $ENV{MODDIR}
+        die "--rebuild won't change the shared MODDIR $ENV{MODDIR}; unset MODDIR to use an unpacked copy\n"
+    my $moddir = "$pwd/mymake"
+    my $stamp = read_stamp("$moddir/modules.stamp")
+    $if !-f "$pwd/maint/version.m4" or !$stamp
+        die "--rebuild: run it in an MPICH checkout whose modules are unpacked in mymake/ (run mymake.pl first)\n"
+    my $extra = join(' ', @extra_args)
+    my $options = $stamp->{"options-yaksa"}
+    $print "rebuild yaksa in $moddir/yaksa, options: $options $extra"
+    my $ok = eval { rebuild_yaksa($pwd, $moddir, $options, $extra, $opts{jobs}); 1 }
+    $if !$ok
+        print $@
+        system "tail -15 $moddir/yaksa-rebuild.log"
+        die "yaksa rebuild failed\n"
+    $stamp->{"key-yaksa"} = tree_hash($pwd, "$(yaksa_dir)", $moddir)
+    $stamp->{"options-yaksa"} = "$options $extra"
+    $stamp->{"options-yaksa"} =~ s/^\s+|\s+$//g
+    write_stamp("$moddir/modules.stamp", $stamp)
+    $print "  yaksa: done; run make in the checkout to relink"
