@@ -165,7 +165,7 @@ fncode: build_one_body($c, $dir)
         # start from a clean copy of the source, as the old scripts did
         system "rm -rf $dir"
         $if $c=~/^(libtool|mpl|mpi_h|pmi|romio)$/
-            # (quick-mode components get their sources in quick_setup)
+            # (quick-mode components get their sources in comp_setup / frame_setup)
             mkdir $dir or die "mkdir $dir: $!\n"
         $elif $c eq "yaksa"
             mkdir $dir or die "mkdir $dir: $!\n"

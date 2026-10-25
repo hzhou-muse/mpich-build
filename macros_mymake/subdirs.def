@@ -54,8 +54,8 @@ macros:
     Hromio: $(Dromio)/adio/include/romioconf.h
 
     # pmi and romio as modules: paths in the modules tree (mymake_modules.pl)
-    Mpmi: pmi/src/pmi
-    Mromio: romio/src/mpi/romio
+    Mpmi: pmi
+    Mromio: romio
 
     Dpmi: src/pmi
     Ipmi: $(Dpmi)/include

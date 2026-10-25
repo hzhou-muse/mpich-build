@@ -18,7 +18,8 @@ subcode: set_variant
     $elif $opts{name} eq "gpu"
         $if !$cuda_prefix
             die "variant gpu: CUDA not found (no nvcc on PATH, no /usr/local/cuda)\n"
-        $(for:yaksa,libfabric,ucx,mpl)
+        # pmi and romio compile against mpl's GPU headers (cuda.h)
+        $(for:yaksa,libfabric,ucx,mpl,pmi,romio)
             $comp_opts{$1} = "--with-cuda=$cuda_prefix"
     $elif $opts{name} eq "hip"
         $if !$rocm_prefix
@@ -26,7 +27,8 @@ subcode: set_variant
         $comp_opts{yaksa} = "--with-hip=$rocm_prefix"
         $comp_opts{libfabric} = "--with-rocr=$rocm_prefix"
         $comp_opts{ucx} = "--with-rocm=$rocm_prefix"
-        $comp_opts{mpl} = "--with-hip=$rocm_prefix"
+        $(for:mpl,pmi,romio)
+            $comp_opts{$1} = "--with-hip=$rocm_prefix"
     $else
         die "unknown variant $opts{name} (cpu, gpu, hip)\n"
 
@@ -100,38 +102,35 @@ subcode: recipe_mydef_boot
     NOOP
 
 # -- in-tree components, built in quick mode ------------------------
-# Each builds in a small tree laid out like MPICH's (maint/version.m4,
-# mymake/opts, libtool, src/<component>), so mymake_config.pl and
-# mymake_makefile.pl run on it unchanged. Dependencies are relative
-# symlinks to the sibling modules, so they work wherever the tree is unpacked.
+# mpl, pmi and romio each build in their own directory, which holds the
+# component's files as in the MPICH tree (src/mpl, src/pmi, src/mpi/romio)
+# plus mymake/ with the inputs of mymake_config.pl / mymake_makefile.pl;
+# dependencies are found as siblings (../mpl, ../mpi_h/include).
 subcode: recipe_mpl
-    quick_setup($dir, $c)
+    comp_setup($dir, $c)
     run("perl $mymake_dir/mymake_config.pl mpl")
     run("perl $mymake_dir/mymake_makefile.pl mpl")
-    run("make -C src/mpl -j$opts{jobs}")
+    run("make -j$opts{jobs}")
 
 subcode: recipe_pmi
-    quick_setup($dir, $c)
-    run("ln -s ../../mpl/src/mpl src/mpl")
-    run("cd src/pmi && python3 maint/gen_pmi_msg.py")
+    comp_setup($dir, $c)
+    run("python3 maint/gen_pmi_msg.py")
     run("perl $mymake_dir/mymake_config.pl pmi")
     run("perl $mymake_dir/mymake_makefile.pl pmi")
-    run("make -C src/pmi -j$opts{jobs}")
+    run("make -j$opts{jobs}")
 
 subcode: recipe_romio
-    quick_setup($dir, $c)
-    run("ln -s ../../mpl/src/mpl src/mpl")
-    run("ln -s ../../mpi_h/include src/include")
+    comp_setup($dir, $c)
     run("perl $mymake_dir/mymake_config.pl romio")
     run("perl $mymake_dir/mymake_makefile.pl romio")
-    run("make -C src/mpi/romio -j$opts{jobs}")
+    run("make -j$opts{jobs}")
 
 # the module is just include/ with the generated and copied headers
 subcode: recipe_mpi_h
     my $work = "$dir/work"
     mkdir $work or die "mkdir $work: $!\n"
     chdir $work
-    quick_setup($work, $c)
+    frame_setup($work, $c)
     run("mkdir -p src/mpi_t test/mpi/include")
     run("python3 maint/gen_binding_c.py -single-source")
     run("perl $mymake_dir/mymake_config.pl mpi_h")
@@ -234,6 +233,9 @@ fncode: quick_keys($repo, $tmpdir, $mpl_opts)
     my $mpl = "mpl:$k{mpl}/$mpl_opts"
     $k{pmi} = tree_hash($repo, "src/pmi", $tmpdir) . " $mpl"
     $k{romio} = tree_hash($repo, "src/mpi/romio", $tmpdir) . " $mpl mpi_h:$k{mpi_h}"
+    # the module layout (flat: <component>/ is the component's directory)
+    $foreach $c in qw(mpl pmi romio)
+        $k{$c} .= " layout:flat"
     return \%k
 
 # (re)build a quick-mode component from scratch in $dir; takes seconds
@@ -348,17 +350,36 @@ fncode: check_modules
             write_stamp("$moddir/modules.stamp", $stamp)
 
 # -- quick-mode component trees ----------------------------------------
-# the MPICH-like frame mymake_config.pl / mymake_makefile.pl expect
-fncode: quick_setup($top, $c)
-    $global $variant_dir, %comp_opts
-    my %paths = (mpl => "src/mpl", pmi => "src/pmi", romio => "src/mpi/romio", mpi_h => "maint src/binding src/include")
+# a component in its own directory: its files, mymake/ (opts, args,
+# make_opts.mpich, version.m4) and libtool from the sibling libtool module
+fncode: comp_setup($dir, $c)
+    my %paths = (mpl => "src/mpl", pmi => "src/pmi", romio => "src/mpi/romio")
+    my $path = $paths{$c}
+    my $n = () = $path =~ /\//g
+    $n += 1
+    run("git -C $opts{mpich} ls-files -z -co --exclude-standard -- $path | (cd $opts{mpich} && tar --null -T - -cf -) | tar -C $dir --strip-components=$n -xf -")
+    run("mkdir -p $dir/mymake && cp $opts{mpich}/maint/version.m4 $dir/mymake/")
+    run("ln -s ../libtool/libtool $dir/libtool")
+    my %o = (srcdir => ".", mpl_dir => "../mpl", mpi_includedir => "../mpi_h/include", version_m4 => "mymake/version.m4")
+    mymake_inputs($dir, $c, \%o)
+
+# mpi_h: an MPICH-like work tree (maint, src/binding, src/include), as its
+# generators expect
+fncode: frame_setup($top, $c)
+    $global $variant_dir
     run("mkdir -p $top/maint $top/mymake $top/src")
-    run("cp $opts{mpich}/maint/version.m4 $top/maint/")
     run("cp $variant_dir/libtool/libtool $top/libtool")
+    run("git -C $opts{mpich} ls-files -z -co --exclude-standard -- maint src/binding src/include | (cd $opts{mpich} && tar --null -T - -cf -) | tar -C $top -xf -")
+    mymake_inputs($top, $c, {})
+
+# mymake/{args,opts,make_opts.mpich} in $top: the variant's options for
+# component $c, plus %$extra
+fncode: mymake_inputs($top, $c, $extra)
+    $global %comp_opts
     my $args = $comp_opts{$c}
     &call open_w, $top/mymake/args
         print Out "$args\n"
-    my %o = (CC => $ENV{CC} || "gcc", CXX => $ENV{CXX} || "g++", FC => $ENV{FC} || "gfortran", quick => 1)
+    my %o = (CC => $ENV{CC} || "gcc", CXX => $ENV{CXX} || "g++", FC => $ENV{FC} || "gfortran", quick => 1, %$extra)
     $foreach $a in split /\s+/, $args
         $if $a=~/^--([\w-]+)=(.*)/
             $o{$1} = $2
@@ -372,6 +393,3 @@ fncode: quick_setup($top, $c)
     &call open_w, $top/mymake/make_opts.mpich
         print Out "CC: $o{CC}\nCXX: $o{CXX}\nF77: $o{FC}\nFC: $o{FC}\n"
         print Out "cc_version: gcc $ver\ncc_weak: \ncflags: -g -O2\nldflags: \n"
-    # sources, as in the checkout's working tree
-    my $paths = $paths{$c}
-    run("git -C $opts{mpich} ls-files -z -co --exclude-standard -- $paths | (cd $opts{mpich} && tar --null -T - -cf -) | tar -C $top -xf -")
