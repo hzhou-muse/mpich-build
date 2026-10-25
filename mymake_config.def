@@ -15,6 +15,7 @@ include: macros_mymake/config_hydra.def
 include: macros_mymake/config_fortran.def
 include: macros_mymake/config_test.def
 include: macros_mymake/config_romio.def
+include: macros_mymake/config_mpi_h.def
 
 # Goal: skip autoconf and produce mpichconf.h
 # Input:        %opts
@@ -24,7 +25,7 @@ include: macros_mymake/config_romio.def
 output_dir: ./mymake
 
 macros:
-    config_cases: mpich, mpl, pmi, opa, hydra, fortran, test, dtpools, romio
+    config_cases: mpich, mpl, pmi, opa, hydra, fortran, test, dtpools, romio, mpi_h
     # showcond: 1
     # showload: 1
 
@@ -57,7 +58,8 @@ page: mymake_config
 
     $call set_cc
     $call get_c_sizeof
-    $call get_c_headers
+    $if $config_in
+        $call get_c_headers
     $call get_c_features
 
     $(for:a in $(config_cases))
@@ -68,8 +70,10 @@ page: mymake_config
             $(if:a=mpich)
                 $call dump_make_opts
 
-    $call collect_config_h
-    $call dump_config_h
+    # mpi_h has no config header
+    $if $config_in
+        $call collect_config_h
+        $call dump_config_h
 
 page: mymake_makefile
     module: perl
@@ -256,11 +260,12 @@ subcode: get_c_sizeof
     $global %sizeof_hash
     my @header_list=("stdio.h")
     my @type_list=("void *", "char", "short", "int", "long", "long long", "size_t", "off_t", "float", "double", "long double")
-    $if $config eq "mpich"
+    # mpi_h needs the same types for mpi.h (MPI_AINT, BSEND_OVERHEAD)
+    $if $config eq "mpich" or $config eq "mpi_h"
         $call additional_types
     get_sizeof(\@type_list, \@header_list)
 
-    $if $config eq "mpich"
+    $if $config eq "mpich" or $config eq "mpi_h"
         $call get_c_sizeof_mpich
 
     # -- mpich ---------------------

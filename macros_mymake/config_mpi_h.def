@@ -1,0 +1,14 @@
+# mpi_h: the public MPI headers (and mpir_ext.h) as a module, for components
+# built outside the MPICH tree (romio). No config header; mpi_proto.h comes
+# from maint/gen_binding_c.py, run by mymake_modules.pl.
+subcode: config_init_mpi_h
+    $config_in = ""
+
+subcode: config_mpi_h
+    my $mpi_h_confs
+    $call patch_mpi_h
+    $call patch_mpir_ext_h
+    $call patch_mpi_fortran_h_in
+
+subcode: make_mpi_h
+    die "mpi_h has no Makefile\n"

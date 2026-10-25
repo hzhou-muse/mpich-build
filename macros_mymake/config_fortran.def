@@ -106,11 +106,13 @@ subcode: config_fortran
             $confs{MPICH_COMPILER_FC} = "$opts{FC} $opts{FCFLAGS}"
             autoconf_file("src/binding/fortran/localdefs", \%confs)
 
-    subcode: patch_mpi_fortran_h_in
-        $if -f "src/binding/fortran/mpif_h/mpi_fortran.h.in"
-            my %confs
-            $confs{MPI_FINT} = "int"
-            autoconf_file("src/binding/fortran/mpif_h/mpi_fortran.h", \%confs)
+
+# top level: also used by config_mpi_h
+subcode: patch_mpi_fortran_h_in
+    $if -f "src/binding/fortran/mpif_h/mpi_fortran.h.in"
+        my %confs
+        $confs{MPI_FINT} = "int"
+        autoconf_file("src/binding/fortran/mpif_h/mpi_fortran.h", \%confs)
 
 #----------------------------------------
 subcode: make_fortran
