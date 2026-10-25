@@ -142,15 +142,19 @@ tarballs keep working.
 it can.
 
 ```
-perl <mpich-build>/mymake/mymake_modules.pl --name=<variant> [--mpich=<checkout>] [options]
+perl <mpich-build>/mymake/mymake_modules.pl --name=<variant> [--mpich=<checkout>]
+perl <mpich-build>/mymake/mymake_modules.pl --rebuild=<component> [component options]
 ```
 
-- **Variants.** A variant is a name plus MPICH-style options
-  (`--with-cuda=...`, `--enable-g=dbg`, ...). The builder maps them to each
-  component's own configure options (e.g. `--with-cuda` enables the CUDA
-  backend in yaksa, libfabric, ucx and mpl). Options are saved per variant,
-  as `mymake/args` is for a checkout, so `--name=gpu` alone rebuilds it.
-  Several variants (cpu, gpu, debug, ...) live side by side.
+- **Variants are preset.** `mymake_modules.pl` knows a fixed set of variants
+  (`cpu`, `gpu` for CUDA, and others such as hip or ze where the host has
+  them) and hard-codes their options, filling in host details by detection
+  (e.g. the CUDA prefix from `nvcc` or `/usr/local/cuda`). Each component
+  takes the variant in its own terms (e.g. yaksa's `--with-cuda`, ucx's
+  `--with-cuda`, mpl's GPU support; debug flags differ per component too),
+  so this mapping is per-component code, not a set of shared options. There
+  is no config file and no saved options: building a variant is just
+  `--name=<variant>`.
 - **Source.** Components come from an MPICH checkout (`--mpich`, default the
   current directory): in-tree components from their directories, submodules
   at the commits the checkout records (`git ls-tree HEAD modules/`).
@@ -161,7 +165,6 @@ perl <mpich-build>/mymake/mymake_modules.pl --name=<variant> [--mpich=<checkout>
   ```
   mpich-modules/
       <variant>/<component>/    persistent build trees
-      variants/<variant>.args   saved options
       modules-<variant>.tar.gz  packed trees, with a STAMP
   ```
 
@@ -176,12 +179,12 @@ perl <mpich-build>/mymake/mymake_modules.pl --name=<variant> [--mpich=<checkout>
   | hwloc, libfabric, ucx | submodules | autotools at first, quick later where it pays off |
   | libtool, mydef_boot | as today | as today |
 
-- **Single-component rebuild**, for debugging: `--rebuild=<component>`
-  rebuilds just that component (with the variant's options, or extra ones
-  such as `--enable-g=dbg`) and repacks the tarball; run inside a checkout,
-  it rebuilds the component in that checkout's modules tree instead, so a
-  branch's change to, say, yaksa can be relinked without touching the shared
-  tarball.
+- **Customization is a single-component rebuild.** Anything beyond the preset
+  variants starts from an existing variant tarball: run inside a checkout,
+  `--rebuild=<component> [component options]` rebuilds just that component in
+  the checkout's modules tree, with the variant's options plus the extra
+  ones (e.g. a debug build of yaksa), and leaves the shared tarball alone.
+  The same command serves debugging a branch's change to a component.
 - **STAMP.** Each tarball records the MPICH commit it was built from, the
   options, the compilers, and per component either the submodule commit or,
   for in-tree components, the git tree hash of its directory
@@ -221,14 +224,21 @@ perl <mpich-build>/mymake/mymake_modules.pl --name=<variant> [--mpich=<checkout>
   `$MODTARBALL`, else `../mpich-modules/modules-<variant>.tar.gz` (variant
   `gpu` with `--with-cuda`, else `cpu`), unpacked into the checkout.
 - On a tree-hash mismatch, an in-tree component is rebuilt automatically.
+- Variants are preset in `mymake_modules.pl`, with options hard-coded per
+  component and host details detected; no config file, no saved options.
+  Further customization means rebuilding individual components on top of an
+  existing variant tarball.
 - `mymake_modules.pl` writes to `mpich-modules/` next to the checkout by
   default. The old hzhou/mpich-modules repository will be retired, which
   frees the name.
 
 ## Open questions
 
-- Are saved per-variant args files enough, or should all variants be listed
-  in one config file?
+- Which variants to preset: `cpu` and `gpu` (CUDA) for sure; hip and ze only
+  when detected? Debug builds of the whole set as a variant, or only through
+  single-component rebuilds?
+- Should a customized checkout tree be packable as its own tarball, or stay
+  checkout-local?
 
 ## Planned
 
