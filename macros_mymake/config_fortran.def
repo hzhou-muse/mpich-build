@@ -194,9 +194,8 @@ subcode: mod_add_extra_use_mpi_f08
 
 
 fncode: fc_has_type($type)
-    &call open_w, mymake/t-fc.f
+    my ($src, $obj) = (probe_path("fc.f"), probe_path("fc.o"))
+    &call open_w, $src
         print Out "      program t\n      $type a\n      end\n"
-    system "$opts{FC} -c -o mymake/t-fc.o mymake/t-fc.f >/dev/null 2>&1"
-    my $ret = ($? == 0)
-    unlink "mymake/t-fc.f", "mymake/t-fc.o"
-    return $ret
+    system "$opts{FC} -c -o $obj $src >/dev/null 2>&1"
+    return $? == 0

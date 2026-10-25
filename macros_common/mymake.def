@@ -9,6 +9,11 @@ subcode: _autoload
     # defaults
     $opts{prefix} = "$pwd/_inst"
 
+# scratch files of compiler probes; removed when the script finishes
+fncode: probe_path($name)
+    mkdir "mymake/probe"
+    return "mymake/probe/$name"
+
 # -- %opts --
 subcode: save_opts
     $opts{config_args} = join(' ', @config_args)

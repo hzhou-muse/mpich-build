@@ -74,6 +74,7 @@ page: mymake_config
     $if $config_in
         $call collect_config_h
         $call dump_config_h
+    system "rm -rf mymake/probe"
 
 page: mymake_makefile
     module: perl
@@ -284,10 +285,10 @@ subcode: get_c_sizeof
             push @type_list, "$1 _Complex"
 
 fncode: get_sizeof($typelist, $headerlist)
-    my $tname="t-$$"
-    $call dump_c_test, mymake/$tname.c
+    my ($src, $exe) = (probe_path("sizeof.c"), probe_path("sizeof.out"))
+    $call dump_c_test, $src
 
-    my $t = `$opts{CC} mymake/$tname.c -o mymake/$tname.out 2>/dev/null && mymake/$tname.out`
+    my $t = `$opts{CC} $src -o $exe 2>/dev/null && $exe`
     $if $? == 0
         $while $t=~/A(\d+):\s+(\d+)/g
             my $name = get_config_name($typelist->[$1]);
@@ -427,10 +428,11 @@ fncode: get_cc_version($cc)
         return "unknown"
 
 fncode: test_cc_header($cc, $header)
-    &call open_w, mymake/t.c
+    my ($src, $obj) = (probe_path("header.c"), probe_path("header.o"))
+    &call open_w, $src
         print Out "#include <$header>\n"
         print Out "int main(){return 0;}\n"
-    system "$cc -c -o mymake/t.o mymake/t.c 2>/dev/null"
+    system "$cc -c -o $obj $src 2>/dev/null"
     # $print ? = $?
     $if $? == 0
         return 1

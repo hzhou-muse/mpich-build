@@ -289,7 +289,8 @@ subcode: mpich_configure
 #---------------------------------------- 
 subcode: patch_sizeof_atomic
     $if -f "src/mpl/include/mpl_atomic.h"
-        &call open_w, "mymake/t.c"
+        my ($src, $exe) = (probe_path("atomic.c"), probe_path("atomic"))
+        &call open_w, $src
             $(set:print_to=Out)
             $print #include "mpl_atomic.h"
             $print #include <pthread.h>
@@ -297,8 +298,8 @@ subcode: patch_sizeof_atomic
             $print "int main() { return sizeof(MPL_atomic_ptr_t); }"
 
         my $CC = get_make_var("CC")
-        system "$CC -Isrc/mpl/include mymake/t.c -o mymake/t"
-        system "mymake/t"
+        system "$CC -Isrc/mpl/include $src -o $exe"
+        system $exe
         my $ret = $? >> 8;
 
         $config_defines{SIZEOF_MPL_ATOMIC_PTR_T} = $ret

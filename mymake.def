@@ -73,6 +73,7 @@ page: mymake
             $print "$(mpich_config_h)" already exist.
     $else
         $call mpich_slow
+    system "rm -rf mymake/probe"
 
     subcode: run_script(script)
         $print "[$(script)]"
@@ -213,6 +214,7 @@ page: mymake_clean
 
     push @realclean_list, "configure"
     push @realclean_list, "mymake/t-*"
+    push @realclean_list, "mymake/probe"
     push @realclean_list, "mymake/Makefile.*"
 
     push @realclean_list, "mymake/mpl"
