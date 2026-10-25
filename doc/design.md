@@ -45,8 +45,8 @@ Common to both modes (`mymake.pl`):
 1. Parse arguments. With no arguments, reuse the last ones from
    `mymake/args`. With new arguments and an existing Makefile, run
    `make realclean` first unless `-noclean` is given.
-2. Unpack the modules tarball into `<checkout>/mymake/` (once; marked by
-   `mymake/skip_tarball`).
+2. Find the modules tree (see [Modules](#modules)); a tarball is unpacked
+   into `<checkout>/mymake/` once, marked by `mymake/skip_tarball`.
 3. Run MPICH's own generators: `gen_binding_c.py`, `gen_abi.py`,
    `gen_ch4_api.py`, `gen_coll.py`, `gen_pmi_msg.py`, `mpicc.def` (MyDef), the
    C++ and Fortran binding generators. These are what `autogen.sh` would run,
@@ -98,49 +98,139 @@ Templates are generated at setup and re-synced lazily, only when a
 difference shows up (a new `#undef` that quick mode doesn't know about, a
 build problem traced to a stale template).
 
-## Modules tarball
+## Modules
 
-MPICH depends on hwloc, yaksa, libfabric and ucx (and uses libtool and
-MyDef). Running their autogen, configure and make for every checkout costs
-several minutes. mymake takes them from a **modules tarball**: configured
-and already built trees, unpacked into each checkout's `mymake/`. The Makefile
-still has rules to build them, so make only rebuilds what changed.
+MPICH builds a set of components besides its own core: the external
+submodules hwloc, libfabric and ucx; the in-tree components mpl, pmi, romio
+and yaksa (yaksa is no longer an external module); and the helpers libtool
+and MyDef. Running their autogen, configure and make in every checkout costs
+several minutes, so mymake takes them prebuilt from a **modules tree**.
 
-- **Host-specific by design.** A tarball is built on, and for, the host
-  that uses it; it holds compiled objects and configured headers and isn't
-  meant to be portable.
-- **Located through `$MODTARBALL`** (or `modules.tar.gz` in the checkout, or
-  `$MODDIR` pointing to an unpacked tree). With `--with-cuda` or `--with-hip`
-  mymake uses `modules-gpu.tar.gz` / `modules-hip.tar.gz` next to the given
-  file, if it exists.
-- **Drift is accepted by design.** The module versions in a tarball can lag
-  behind an MPICH branch's submodules, in the same way the config templates
-  and the quick-mode logic can lag behind MPICH's configure. This drift is
-  fairly stable and rarely breaks a build; the answer is to make rebuilds
-  cheap, not to rebuild on every change.
+### Modules tree and tarball
+
+A modules tree holds the configured and built components. A checkout uses one
+as follows:
+
+1. If `$MODDIR` is set, use that tree directly (no copy).
+2. Otherwise unpack a modules tarball into the checkout's `mymake/` and use
+   that. The tarball is `$MODTARBALL` if set, else
+   `../mpich-modules/modules-<variant>.tar.gz` next to the checkout, where
+   `<variant>` is `gpu` with `--with-cuda` and `cpu` otherwise. (Today: a
+   `modules.tar.gz` in the checkout, or `$MODTARBALL` with an automatic
+   `-gpu`/`-hip` file name; the `../mpich-modules` default comes with step 1.)
+
+The Makefile keeps rules to build each component in the tree, so make only
+rebuilds what changed. Unpacking per checkout (the default) keeps checkouts
+independent: a checkout that rebuilds a component (see drift below) does so in
+its own copy. A shared `$MODDIR` skips the copy, for when that isn't needed.
+
+Components the tree doesn't provide are built in-tree as before, so older
+tarballs keep working.
+
+- **Host-specific by design.** A tarball is built on, and for, the host that
+  uses it; it holds compiled objects and configured headers and isn't meant
+  to be portable.
+- **Drift is accepted by design.** The components in a tarball can lag behind
+  a checkout, in the same way the config templates and the quick-mode logic
+  can lag behind MPICH's configure. This drift is fairly stable and rarely
+  breaks a build; the answer is to make rebuilds cheap, and to detect drift
+  cheaply.
+
+### mymake_modules.pl (planned)
+
+`mymake_modules.pl` builds modules trees and tarballs, using quick mode where
+it can.
+
+```
+perl <mpich-build>/mymake/mymake_modules.pl --name=<variant> [--mpich=<checkout>] [options]
+```
+
+- **Variants.** A variant is a name plus MPICH-style options
+  (`--with-cuda=...`, `--enable-g=dbg`, ...). The builder maps them to each
+  component's own configure options (e.g. `--with-cuda` enables the CUDA
+  backend in yaksa, libfabric, ucx and mpl). Options are saved per variant,
+  as `mymake/args` is for a checkout, so `--name=gpu` alone rebuilds it.
+  Several variants (cpu, gpu, debug, ...) live side by side.
+- **Source.** Components come from an MPICH checkout (`--mpich`, default the
+  current directory): in-tree components from their directories, submodules
+  at the commits the checkout records (`git ls-tree HEAD modules/`).
+- **Output directory.** By default `mpich-modules/` in the parent folder of
+  the checkout, e.g. `~/work/pull-requests/mpich-modules/` for checkouts in
+  `~/work/pull-requests/`. It holds:
+
+  ```
+  mpich-modules/
+      <variant>/<component>/    persistent build trees
+      variants/<variant>.args   saved options
+      modules-<variant>.tar.gz  packed trees, with a STAMP
+  ```
+
+  The build trees are kept, so a rebuild only redoes what changed.
+- **Component recipes.** Each component declares its source, its method and
+  how the variant options map to it:
+
+  | Component | Source | Method |
+  |---|---|---|
+  | mpl, pmi, romio | in-tree | quick (mymake's existing `config_*` code) |
+  | yaksa | in-tree | quick: run `genpup.py`, write `yaksa_config.h` from a template and the Makefile from `Makefile.am` |
+  | hwloc, libfabric, ucx | submodules | autotools at first, quick later where it pays off |
+  | libtool, mydef_boot | as today | as today |
+
+- **Single-component rebuild**, for debugging: `--rebuild=<component>`
+  rebuilds just that component (with the variant's options, or extra ones
+  such as `--enable-g=dbg`) and repacks the tarball; run inside a checkout,
+  it rebuilds the component in that checkout's modules tree instead, so a
+  branch's change to, say, yaksa can be relinked without touching the shared
+  tarball.
+- **STAMP.** Each tarball records the MPICH commit it was built from, the
+  options, the compilers, and per component either the submodule commit or,
+  for in-tree components, the git tree hash of its directory
+  (`git rev-parse HEAD:src/mpl`). At configure time mymake compares them with
+  the checkout:
+  - same: use the prebuilt component;
+  - different, in-tree component: rebuild it in quick mode from the
+    checkout's source, into the checkout's modules tree (seconds for mpl,
+    pmi and romio). This matters most for mpl, whose headers come from the
+    checkout;
+  - different submodule commit: warn.
+  It also warns when the build's options don't match the variant's (e.g.
+  `--with-cuda` with a cpu tarball).
+
+### Steps
+
+1. mpl, pmi and romio into the modules tree, built with the existing quick
+   code; the STAMP with tree hashes; rebuild-on-mismatch; the MODDIR /
+   MODTARBALL / `../mpich-modules` lookup.
+2. Quick mode for yaksa.
+3. hwloc, libfabric and ucx through the same builder (autotools), replacing
+   the scripts of the old hzhou/mpich-modules repository, which is then
+   retired.
+4. Optionally, quick mode for hwloc and libfabric (and ucx).
 
 ## Decisions
 
 - Keep `mymake/` as the output directory name.
 - Don't commit the config templates; generate them with
   `mymake_sync_headers.pl` at setup and when a discrepancy is noticed.
-- `$MODTARBALL` is the way to locate the modules tarball; there is no
-  default location.
-- Tarballs are host-specific, and drift is accepted.
+- Modules tarballs are host-specific, and drift is accepted.
+- A checkout finds its modules through `$MODDIR` (used directly), else
+  `$MODTARBALL`, else `../mpich-modules/modules-<variant>.tar.gz` (variant
+  `gpu` with `--with-cuda`, else `cpu`), unpacked into the checkout.
+- `mymake_modules.pl` writes to `mpich-modules/` next to the checkout by
+  default. The old hzhou/mpich-modules repository will be retired, which
+  frees the name.
+
+## Open questions
+
+- On a tree-hash mismatch for an in-tree component: rebuild automatically
+  (proposed) or only warn?
+- Are saved per-variant args files enough, or should all variants be listed
+  in one config file?
 
 ## Planned
 
-- **Module builds in mpich-build.** Bring in the module build scripts
-  (today in hzhou/mpich-modules) so one repository covers the whole setup.
-- **Quick mode for modules**, starting with yaksa. yaksa is no longer an
-  external module in MPICH (it lives in `src/mpi/datatype/typerep/yaksa`), so
-  it needs a quick mode anyway: run its generators (`genpup.py`), write
-  `yaksa_config.h` from a template and its Makefile from `Makefile.am`, as
-  for MPICH. The same approach would then cover hwloc, libfabric and ucx,
-  making module rebuilds cheap and customizable.
-- **Cheap drift detection** (TODO): a STAMP in the modules tarball (MPICH and
-  module commits, compiler, options) that mymake compares with the checkout,
-  and a similar check of the template STAMP.
+- **Cheap drift detection for the config templates**: compare the template
+  STAMP with the checkout's `configure.ac` files.
 - **Gaps between the modes**: the Fortran targets are `fortran` in quick
   mode and `mpifort` in slow mode; quick mode generates only f77 test
   Makefiles, and its f77 testlist drops the spawn, io, rma and profile
