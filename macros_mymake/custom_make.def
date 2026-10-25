@@ -59,7 +59,7 @@ subcode: custom_make(what)
                 $objects{$add} = $t
 
         subcode:: set_libs_custom
-            $t=~s/(\S+\/)?(mpl|pmi|openpa|izem|hwloc|yaksa|json-c|libfabric|ucx)\/\S+\.la\s*//g
+            $t=~s/(\S+\/)?(mpl|pmi|romio|openpa|izem|hwloc|yaksa|json-c|libfabric|ucx)\/\S+\.la\s*//g
             $t=~s/\@(ofilib|ucxlib|mpl_lib|hwloc_lib|yaksa_lib|pmi_lib|json_lib)\@\s*//g
             $(if:makefile=hydra)
                 $t=~s/-lhydra/libhydra.la/g

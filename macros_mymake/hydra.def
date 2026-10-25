@@ -86,7 +86,10 @@ subcode: hydra_config
 #---- rules in mpich Makefile ------------------ 
 subcode: add_rule_hydra(name)
     my $mkfile="src/pm/$(name)/Makefile"
-    my $add="$(Lmpl) $(Lpmi) \x24(MODDIR)/$(Lhwloc)"
+    my $lpmi = "$(Lpmi)"
+    $if -f "$opts{moddir}/$(Mpmi)/libpmi.la"
+        $lpmi = "\x24(MODDIR)/$(Mpmi)/libpmi.la"
+    my $add="$(Lmpl) $lpmi \x24(MODDIR)/$(Lhwloc)"
     push @extra_make_rules, ".PHONY: $(name) $(name)-install"
     push @extra_make_rules, "$(name): $mkfile $add"
     push @extra_make_rules, "\t(cd src/pm/$(name) && \x24(MAKE) )"

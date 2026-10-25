@@ -15,7 +15,7 @@ output_dir: ./mymake
 page: mymake_modules
     module: perl
 
-    $global @components = qw(libtool hwloc yaksa libfabric ucx mydef_boot)
+    $global @components = qw(libtool hwloc yaksa libfabric ucx mydef_boot mpl mpi_h pmi romio)
 
     $call parse_args_modules
     $if $opts{rebuild}
@@ -66,7 +66,12 @@ subcode: get_sources
     $(for:a in $(module_submodules))
         $call get_submodule, $(a)
     $src_dir{yaksa} = "$mpich/$(yaksa_dir)"
-    $src_key{yaksa} = tree_hash($mpich, "$(yaksa_dir)", "$opts{out}/src")
+    my $tmp = "$opts{out}/src"
+    $src_key{yaksa} = tree_hash($mpich, "$(yaksa_dir)", $tmp)
+    # in-tree components built in quick mode
+    my $k = quick_keys($mpich, $tmp, $comp_opts{mpl})
+    $foreach $c in keys %$k
+        $src_key{$c} = $k->{$c}
     my $lt = `libtoolize --version | head -1`
     chomp $lt
     $src_key{libtool} = $lt
@@ -115,26 +120,26 @@ subcode: build_components
             next
         push @todo, $c
 
-    # libtool first: the others don't need it, but it is quick
+    # in waves: libtool (the quick-mode components copy it); then the rest;
+    # then pmi and romio, which compile against mpl and mpi_h
+    my %wave = (libtool => 0, pmi => 2, romio => 2)
     my @failed
-    $foreach $c in @todo
-        $if $c eq "libtool"
-            $if !build_one($c)
-                push @failed, $c
-    my %pid
-    $foreach $c in @todo
-        $if $c ne "libtool"
-            my $pid = fork()
-            die "fork failed\n" if !defined $pid
-            $if $pid == 0
-                exit(build_one($c) ? 0 : 1)
-            $pid{$pid} = $c
-    $while %pid
-        my $pid = wait()
-        last if $pid < 0
-        $if $? != 0
-            push @failed, $pid{$pid}
-        delete $pid{$pid}
+    $for $w=0:3
+        last if @failed
+        my %pid
+        $foreach $c in @todo
+            $if ($wave{$c} // 1) == $w
+                my $pid = fork()
+                die "fork failed\n" if !defined $pid
+                $if $pid == 0
+                    exit(build_one($c) ? 0 : 1)
+                $pid{$pid} = $c
+        $while %pid
+            my $pid = wait()
+            last if $pid < 0
+            $if $? != 0
+                push @failed, $pid{$pid}
+            delete $pid{$pid}
     $if @failed
         $foreach $c in @failed
             $print "== $c failed, last lines of $variant_dir/$c.log:"
@@ -159,7 +164,8 @@ fncode: build_one($c)
 fncode: build_one_body($c, $dir)
         # start from a clean copy of the source, as the old scripts did
         system "rm -rf $dir"
-        $if $c eq "libtool"
+        $if $c=~/^(libtool|mpl|mpi_h|pmi|romio)$/
+            # (quick-mode components get their sources in quick_setup)
             mkdir $dir or die "mkdir $dir: $!\n"
         $elif $c eq "yaksa"
             mkdir $dir or die "mkdir $dir: $!\n"

@@ -53,6 +53,10 @@ macros:
     Lromio_abi: $(Dromio)/libromio_abi.la
     Hromio: $(Dromio)/adio/include/romioconf.h
 
+    # pmi and romio as modules: paths in the modules tree (mymake_modules.pl)
+    Mpmi: pmi/src/pmi
+    Mromio: romio/src/mpi/romio
+
     Dpmi: src/pmi
     Ipmi: $(Dpmi)/include
     Lpmi: $(Dpmi)/libpmi.la
@@ -96,11 +100,14 @@ subcode: need_pmi(@hydra)
 
         $if !$opts{"with-pmi"} and !$opts{"with-pmi1"} and !$opts{"with-pmi2"}
             $opts{"embed_pmi"} = 1
-            system "mkdir -p $(Dpmi)/confdb && cp -r confdb/. $(Dpmi)/confdb/"
-            system "cp maint/version.m4 $(Dpmi)/"
-            $call add_subdir_inc_lib, pmi
-            $call set_configure
-            $call add_subdir_make, pmi
+            $if -f "$opts{moddir}/$(Mpmi)/libpmi.la"
+                $call use_module, pmi, include/pmi_config.h, libpmi.la
+            $else
+                system "mkdir -p $(Dpmi)/confdb && cp -r confdb/. $(Dpmi)/confdb/"
+                system "cp maint/version.m4 $(Dpmi)/"
+                $call add_subdir_inc_lib, pmi
+                $call set_configure
+                $call add_subdir_make, pmi
         $elif $opts{"with-pmi1"}
             my $L=$opts{"with-pmi"}
             $I_list .= " -I$L/include"
@@ -110,11 +117,18 @@ subcode: need_pmi(@hydra)
             $I_list .= " -I$L/include"
             $L_list .= " -L$L/lib -lpmi2"
     $(else)
-        $I_list .= " -I../../../$(Dpmi)/src"
-        # TODO: use libpmiutil.la
-        $L_list .= " ../../../$(Lpmi)"
-        push @extra_make_rules, "../../../$(Lpmi):"
-        push @extra_make_rules, "\t\x24(MAKE) -C ../../.. $(Lpmi)"
+        $if -f "$opts{moddir}/$(Mpmi)/libpmi.la"
+            my $d = "\x24(MODDIR)/$(Mpmi)"
+            $I_list .= " -I$d/src"
+            $L_list .= " $d/libpmi.la"
+            push @extra_make_rules, "$d/libpmi.la:"
+            push @extra_make_rules, "\t\x24(MAKE) -C $d"
+        $else
+            $I_list .= " -I../../../$(Dpmi)/src"
+            # TODO: use libpmiutil.la
+            $L_list .= " ../../../$(Lpmi)"
+            push @extra_make_rules, "../../../$(Lpmi):"
+            push @extra_make_rules, "\t\x24(MAKE) -C ../../.. $(Lpmi)"
 
     subcode: set_configure
         my @t_env 
@@ -131,15 +145,22 @@ subcode: need_pmi(@hydra)
 
 #---------------------------------------- 
 subcode: need_romio
-    system "mkdir -p $(Dromio)/confdb && cp -r confdb/. $(Dromio)/confdb/"
-    system "cp maint/version.m4 $(Dromio)/"
-    system "touch src/mpi/romio/include/mpio.h"
-    system "ln -sf ../mpi/romio/include/mpio.h src/include/mpio.h"
-    # # mpl
-    # &call modify, configure.ac
-    $call add_subdir_inc_lib, romio
-    $call set_configure
-    $call add_subdir_make, romio
+    my $romio_lib = "libromio.la"
+    $if $opts{"enable-mpi-abi"}
+        $romio_lib = "libromio_abi.la"
+    $if -f "$opts{moddir}/$(Mromio)/$romio_lib"
+        $call use_module, romio, adio/include/romioconf.h, $romio_lib
+        system "ln -sf $opts{moddir}/$(Mromio)/include/mpio.h src/include/mpio.h"
+    $else
+        system "mkdir -p $(Dromio)/confdb && cp -r confdb/. $(Dromio)/confdb/"
+        system "cp maint/version.m4 $(Dromio)/"
+        system "touch src/mpi/romio/include/mpio.h"
+        system "ln -sf ../mpi/romio/include/mpio.h src/include/mpio.h"
+        # # mpl
+        # &call modify, configure.ac
+        $call add_subdir_inc_lib, romio
+        $call set_configure
+        $call add_subdir_make, romio
 
     # $dst_hash{"$(Dromio)/include/mpio.h"} = "$opts{prefix}/include"
     # $dst_hash{"$(Dromio)/include/mpiof.h"} = "$opts{prefix}/include"
@@ -379,3 +400,15 @@ subcode: add_subdir_make(name)
                 &call add_subdir_rule_block, $subdir, src/mpi/romio/libromio_abi.la, $lib_dep
                     push @t, "\x24(MAKE) libromio_abi.la"
 
+
+# a component prebuilt in the modules tree; make still rebuilds it there
+# when its sources change (e.g. synced from the checkout)
+subcode: use_module(name, config_h, lib)
+    $opts{"module_$(name)"} = 1
+    my $d = "\x24(MODDIR)/$(M$(name))"
+    push @CONFIGS, "$d/$(config_h)"
+    $I_list .= " -I$d/include"
+    $L_list .= " $d/$(lib)"
+    push @extra_make_rules, "$d/$(lib): $d/$(config_h)"
+    push @extra_make_rules, "\t(cd $d && \x24(MAKE))"
+    push @extra_make_rules, ""

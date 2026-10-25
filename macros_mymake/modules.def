@@ -3,9 +3,12 @@
 # variant's options for that component. run() logs and dies on failure.
 
 macros:
-    module_components: libtool, hwloc, yaksa, libfabric, ucx, mydef_boot
+    module_components: libtool, hwloc, yaksa, libfabric, ucx, mydef_boot, mpl, mpi_h, pmi, romio
     module_submodules: hwloc, libfabric, ucx, mydef_boot
     yaksa_dir: src/mpi/datatype/typerep/yaksa
+    # inputs of the mpi_h module: what mpi.h, mpi_proto.h, mpir_ext.h and
+    # mpi_fortran.h are generated from
+    mpi_h_inputs: maint/version.m4 maint/gen_binding_c.py maint/local_python src/binding/c 'src/binding/*.txt' src/binding/abi/mpi_abi.h src/binding/fortran/mpif_h/mpi_fortran.h.in src/include/mpi.h.in src/include/mpir_ext.h.in src/include/mpix.h src/include/mpi_legacy.h src/include/nopackage.h
 
 # -- variants: per-component configure options --------------------
 subcode: set_variant
@@ -15,7 +18,7 @@ subcode: set_variant
     $elif $opts{name} eq "gpu"
         $if !$cuda_prefix
             die "variant gpu: CUDA not found (no nvcc on PATH, no /usr/local/cuda)\n"
-        $(for:yaksa,libfabric,ucx)
+        $(for:yaksa,libfabric,ucx,mpl)
             $comp_opts{$1} = "--with-cuda=$cuda_prefix"
     $elif $opts{name} eq "hip"
         $if !$rocm_prefix
@@ -23,6 +26,7 @@ subcode: set_variant
         $comp_opts{yaksa} = "--with-hip=$rocm_prefix"
         $comp_opts{libfabric} = "--with-rocr=$rocm_prefix"
         $comp_opts{ucx} = "--with-rocm=$rocm_prefix"
+        $comp_opts{mpl} = "--with-hip=$rocm_prefix"
     $else
         die "unknown variant $opts{name} (cpu, gpu, hip)\n"
 
@@ -94,6 +98,48 @@ subcode: recipe_ucx
 
 subcode: recipe_mydef_boot
     NOOP
+
+# -- in-tree components, built in quick mode ------------------------
+# Each builds in a small tree laid out like MPICH's (maint/version.m4,
+# mymake/opts, libtool, src/<component>), so mymake_config.pl and
+# mymake_makefile.pl run on it unchanged. Dependencies are relative
+# symlinks to the sibling modules, so they work wherever the tree is unpacked.
+subcode: recipe_mpl
+    quick_setup($dir, $c)
+    run("perl $mymake_dir/mymake_config.pl mpl")
+    run("perl $mymake_dir/mymake_makefile.pl mpl")
+    run("make -C src/mpl -j$opts{jobs}")
+
+subcode: recipe_pmi
+    quick_setup($dir, $c)
+    run("ln -s ../../mpl/src/mpl src/mpl")
+    run("cd src/pmi && python3 maint/gen_pmi_msg.py")
+    run("perl $mymake_dir/mymake_config.pl pmi")
+    run("perl $mymake_dir/mymake_makefile.pl pmi")
+    run("make -C src/pmi -j$opts{jobs}")
+
+subcode: recipe_romio
+    quick_setup($dir, $c)
+    run("ln -s ../../mpl/src/mpl src/mpl")
+    run("ln -s ../../mpi_h/include src/include")
+    run("perl $mymake_dir/mymake_config.pl romio")
+    run("perl $mymake_dir/mymake_makefile.pl romio")
+    run("make -C src/mpi/romio -j$opts{jobs}")
+
+# the module is just include/ with the generated and copied headers
+subcode: recipe_mpi_h
+    my $work = "$dir/work"
+    mkdir $work or die "mkdir $work: $!\n"
+    chdir $work
+    quick_setup($work, $c)
+    run("mkdir -p src/mpi_t test/mpi/include")
+    run("python3 maint/gen_binding_c.py -single-source")
+    run("perl $mymake_dir/mymake_config.pl mpi_h")
+    mkdir "$dir/include" or die "mkdir $dir/include: $!\n"
+    $foreach $h in qw(src/include/mpi.h src/include/mpi_proto.h src/include/mpix.h src/include/mpi_legacy.h src/include/mpir_ext.h src/include/nopackage.h src/binding/fortran/mpif_h/mpi_fortran.h src/binding/abi/mpi_abi.h)
+        run("cp $h $dir/include/")
+    chdir $dir
+    run("rm -rf $work")
 
 # -- helpers -------------------------------------------------------
 fncode: run($cmd)
@@ -168,6 +214,37 @@ fncode: tree_hash($repo, $dir, $tmpdir)
         die "can't hash $repo/$dir\n"
     return $t
 
+# same, for a set of paths (pathspecs) in $repo, as one tree
+fncode: tree_hash_paths($repo, $paths, $tmpdir)
+    my $idx = "$tmpdir/.index-$$"
+    unlink $idx
+    my $t = `GIT_INDEX_FILE=$idx git -C $repo add -A -- $paths && GIT_INDEX_FILE=$idx git -C $repo write-tree`
+    unlink $idx
+    chomp $t
+    $if $t!~/^[0-9a-f]+$/
+        die "can't hash $paths in $repo\n"
+    return $t
+
+# keys of the quick-mode components, from $repo's working tree; pmi and
+# romio include the keys of the modules they compile against
+fncode: quick_keys($repo, $tmpdir, $mpl_opts)
+    my %k
+    $k{mpl} = tree_hash($repo, "src/mpl", $tmpdir)
+    $k{mpi_h} = tree_hash_paths($repo, "$(mpi_h_inputs)", $tmpdir)
+    my $mpl = "mpl:$k{mpl}/$mpl_opts"
+    $k{pmi} = tree_hash($repo, "src/pmi", $tmpdir) . " $mpl"
+    $k{romio} = tree_hash($repo, "src/mpi/romio", $tmpdir) . " $mpl mpi_h:$k{mpi_h}"
+    return \%k
+
+# (re)build a quick-mode component from scratch in $dir; takes seconds
+fncode: build_quick($c, $dir)
+    system "rm -rf $dir"
+    mkdir $dir or die "mkdir $dir: $!\n"
+    chdir $dir or die "chdir $dir: $!\n"
+    $(for:a in mpl, mpi_h, pmi, romio)
+        $case $c eq "$(a)"
+            $call recipe_$(a)
+
 # -- in-tree components: follow the checkout ---------------------------
 # copy the files of $repo/$dir (tracked and untracked) that differ from $dst
 fncode: sync_tree($repo, $dir, $dst)
@@ -239,3 +316,62 @@ fncode: check_modules
             die "yaksa rebuild failed\n"
         $stamp->{"key-yaksa"} = $h
         write_stamp("$moddir/modules.stamp", $stamp)
+    $call check_quick_modules
+
+    # mpl, mpi_h, pmi, romio: rebuild those whose key differs (dependents
+    # follow, since their keys include their dependencies' keys)
+    subcode: check_quick_modules
+        my $want = quick_keys($pwd, $moddir, $stamp->{"options-mpl"})
+        my @rebuild = grep { $stamp->{"key-$_"} and $stamp->{"key-$_"} ne $want->{$_} } qw(mpl mpi_h pmi romio)
+        $if @rebuild and $opts{moddir_shared}
+            $print "WARNING: @rebuild differ from the checkout; not rebuilding them in the shared MODDIR $moddir"
+        $elif @rebuild
+            $print "modules: @rebuild differ from the checkout, rebuilding in $moddir"
+            # the recipes' context, as in mymake_modules.pl
+            local $opts{mpich} = $pwd
+            local $opts{jobs} = `nproc`
+            chomp $opts{jobs}
+            $variant_dir = $moddir
+            $foreach $c in qw(mpl mpi_h pmi romio)
+                $comp_opts{$c} = $stamp->{"options-$c"}
+            $foreach $c in @rebuild
+                $run_log = "$moddir/$c-rebuild.log"
+                unlink $run_log
+                my $ok = eval { build_quick($c, "$moddir/$c"); 1 }
+                chdir $pwd
+                $if !$ok
+                    print $@
+                    system "tail -15 $run_log"
+                    die "$c rebuild failed\n"
+                $print "  $c: rebuilt, log in $run_log"
+                $stamp->{"key-$c"} = $want->{$c}
+            write_stamp("$moddir/modules.stamp", $stamp)
+
+# -- quick-mode component trees ----------------------------------------
+# the MPICH-like frame mymake_config.pl / mymake_makefile.pl expect
+fncode: quick_setup($top, $c)
+    $global $variant_dir, %comp_opts
+    my %paths = (mpl => "src/mpl", pmi => "src/pmi", romio => "src/mpi/romio", mpi_h => "maint src/binding src/include")
+    run("mkdir -p $top/maint $top/mymake $top/src")
+    run("cp $opts{mpich}/maint/version.m4 $top/maint/")
+    run("cp $variant_dir/libtool/libtool $top/libtool")
+    my $args = $comp_opts{$c}
+    &call open_w, $top/mymake/args
+        print Out "$args\n"
+    my %o = (CC => $ENV{CC} || "gcc", CXX => $ENV{CXX} || "g++", FC => $ENV{FC} || "gfortran", quick => 1)
+    $foreach $a in split /\s+/, $args
+        $if $a=~/^--([\w-]+)=(.*)/
+            $o{$1} = $2
+        $elif $a=~/^--([\w-]+)$/
+            $o{$1} = 1
+    &call open_w, $top/mymake/opts
+        $foreach $k in sort keys %o
+            print Out "$k: $o{$k}\n"
+    my $ver = `$o{CC} -dumpfullversion 2>/dev/null`
+    chomp $ver
+    &call open_w, $top/mymake/make_opts.mpich
+        print Out "CC: $o{CC}\nCXX: $o{CXX}\nF77: $o{FC}\nFC: $o{FC}\n"
+        print Out "cc_version: gcc $ver\ncc_weak: \ncflags: -g -O2\nldflags: \n"
+    # sources, as in the checkout's working tree
+    my $paths = $paths{$c}
+    run("git -C $opts{mpich} ls-files -z -co --exclude-standard -- $paths | (cd $opts{mpich} && tar --null -T - -cf -) | tar -C $top -xf -")
