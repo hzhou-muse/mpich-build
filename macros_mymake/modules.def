@@ -1,0 +1,101 @@
+#---- modules: components, variants and build recipes -------------
+# Each recipe runs in the component's build directory; $extra holds the
+# variant's options for that component. run() logs and dies on failure.
+
+macros:
+    module_components: libtool, hwloc, yaksa, libfabric, ucx, mydef_boot
+    module_submodules: hwloc, libfabric, ucx, mydef_boot
+    yaksa_dir: src/mpi/datatype/typerep/yaksa
+
+# -- variants: per-component configure options --------------------
+subcode: set_variant
+    $global %comp_opts
+    $if $opts{name} eq "cpu"
+        NOOP
+    $elif $opts{name} eq "gpu"
+        $if !$cuda_prefix
+            die "variant gpu: CUDA not found (no nvcc on PATH, no /usr/local/cuda)\n"
+        $(for:yaksa,libfabric,ucx)
+            $comp_opts{$1} = "--with-cuda=$cuda_prefix"
+    $elif $opts{name} eq "hip"
+        $if !$rocm_prefix
+            die "variant hip: ROCm not found (no /opt/rocm or /usr/local/rocm)\n"
+        $comp_opts{yaksa} = "--with-hip=$rocm_prefix"
+        $comp_opts{libfabric} = "--with-rocr=$rocm_prefix"
+        $comp_opts{ucx} = "--with-rocm=$rocm_prefix"
+    $else
+        die "unknown variant $opts{name} (cpu, gpu, hip)\n"
+
+subcode: detect_host
+    $global $cuda_prefix, $rocm_prefix
+    my $nvcc = `which nvcc 2>/dev/null`
+    chomp $nvcc
+    $if $nvcc=~/^(.*)\/bin\/nvcc$/
+        $cuda_prefix = $1
+    $elif -d "/usr/local/cuda"
+        $cuda_prefix = "/usr/local/cuda"
+    $foreach $d in "/opt/rocm", "/usr/local/rocm"
+        $if !$rocm_prefix and -d $d
+            $rocm_prefix = $d
+
+# -- recipes -------------------------------------------------------
+subcode: recipe_libtool
+    &call open_w, configure.ac
+        print Out "AC_INIT\nLT_INIT\nAC_PROG_CXX\nAC_PROG_F77\nAC_PROG_FC\nLT_OUTPUT\n"
+    run("libtoolize -i")
+    run("aclocal")
+    run("autoconf")
+    run("./configure --disable-static")
+
+subcode: recipe_hwloc
+    run("sh autogen.sh")
+    my $t = "--enable-embedded-mode --enable-visibility=no --disable-libxml2"
+    $t .= " --disable-nvml --disable-cuda --disable-opencl --disable-rsmi"
+    run("CFLAGS=-fvisibility=hidden ./configure $t $extra")
+    run("make -j$opts{jobs}")
+
+subcode: recipe_yaksa
+    run("sh autogen.sh --pup-max-nesting=2")
+    run("./configure --enable-embedded --enable-debug $extra")
+    run("make -j$opts{jobs}")
+
+subcode: recipe_libfabric
+    run("sh autogen.sh")
+    run("./configure --enable-embedded --enable-debug $extra")
+    run("make -j$opts{jobs}")
+    run("find . -name '*.la' | xargs sed -i 's, -pthread,,g'")
+
+subcode: recipe_ucx
+    # drop the UCG part of Makefile.am, from "if HAVE_UCG" to "EXTRA_DIST +="
+    $call get_file_lines, Makefile.am
+    my $skip
+    &call open_w, Makefile.am
+        $foreach $l in @lines
+            $if $l=~/^if HAVE_UCG/
+                $skip = 1
+            $elif $l=~/^EXTRA_DIST \+=/
+                $skip = 0
+            $if !$skip
+                print Out $l
+    run("sh autogen.sh")
+    run("./configure --prefix=/MODPREFIX --disable-static --disable-numa $extra")
+    run("make -j$opts{jobs}")
+    # mymake replaces MODDIR with the unpacked location
+    my $dir = getcwd()
+    run("find . -name '*.la' | xargs sed -i 's,$dir,MODDIR,g'")
+    run("touch need_sed")
+
+subcode: recipe_mydef_boot
+    NOOP
+
+# -- helpers -------------------------------------------------------
+fncode: run($cmd)
+    $global $run_log
+    &call open_a, $run_log
+        print Out "\n: $cmd\n"
+    system("($cmd) >> $run_log 2>&1") == 0 or die "failed: $cmd\n"
+
+subcode: open_a(file)
+    open Out, ">>$(file)" or die "Can't append $(file): $!\n"
+    BLOCK
+    close Out

@@ -1,0 +1,190 @@
+include: macros_common/mymake.def
+include: macros_mymake/modules.def
+
+output_dir: ./mymake
+
+# Build a modules tarball for one preset variant from an MPICH checkout:
+#     mymake_modules.pl --name=cpu|gpu|hip [--mpich=<checkout>] [--out=<dir>]
+#                       [-j=N] [--only=hwloc,yaksa] [--force]
+# Components build in <out>/<name>/<component>/ and are kept; a component is
+# rebuilt only when its source (commit or tree hash) or options change.
+
+page: mymake_modules
+    module: perl
+
+    $global @components = qw(libtool hwloc yaksa libfabric ucx mydef_boot)
+
+    $call parse_args_modules
+    $call detect_host
+    $call set_variant
+    $call get_sources
+    $call build_components
+    $call pack_tarball
+
+subcode: parse_args_modules
+    $opts{name} = "cpu"
+    $opts{mpich} = $pwd
+    $opts{jobs} = `nproc`
+    chomp $opts{jobs}
+    $foreach $a in @ARGV
+        $if $a=~/^--?(name|mpich|out|only)=(.*)/
+            $opts{$1} = $2
+        $elif $a=~/^-j=?(\d+)$/
+            $opts{jobs} = $1
+        $elif $a eq "--force"
+            $opts{force} = 1
+        $else
+            die "Usage: $0 --name=cpu|gpu|hip [--mpich=<checkout>] [--out=<dir>] [-j=N] [--only=a,b] [--force]\n"
+    $opts{mpich} = Cwd::abs_path($opts{mpich})
+    $if !-f "$opts{mpich}/maint/version.m4"
+        die "$opts{mpich} is not an MPICH checkout\n"
+    $if !$opts{out}
+        $opts{out} = $opts{mpich}
+        $opts{out} =~ s/\/[^\/]+$//
+        $opts{out} .= "/mpich-modules"
+    system "mkdir -p $opts{out}/$opts{name} $opts{out}/src"
+    $opts{out} = Cwd::abs_path($opts{out})
+    $global $variant_dir
+    $variant_dir = "$opts{out}/$opts{name}"
+    $print variant $opts{name}: $variant_dir
+
+# -- sources: commits recorded by the checkout -----------------------
+subcode: get_sources
+    $global %src_dir, %src_key
+    my $mpich = $opts{mpich}
+    $(for:a in $(module_submodules))
+        $call get_submodule, $(a)
+    $src_dir{yaksa} = "$mpich/$(yaksa_dir)"
+    $src_key{yaksa} = tree_hash($mpich, "$(yaksa_dir)")
+    my $lt = `libtoolize --version | head -1`
+    chomp $lt
+    $src_key{libtool} = $lt
+
+    subcode: get_submodule(c)
+        my $t = `git -C $mpich ls-tree HEAD modules/$(c)`
+        $if $t!~/commit\s+([0-9a-f]+)/
+            die "modules/$(c) is not a submodule in $mpich\n"
+        my $commit = $1
+        my $url = `git -C $mpich config -f .gitmodules submodule.modules/$(c).url`
+        chomp $url
+        my $src = "$opts{out}/src/$(c)"
+        $if !-d "$src/.git"
+            # an initialized submodule in the checkout saves a download
+            my $from = $url
+            $if -e "$mpich/modules/$(c)/.git"
+                $from = "$mpich/modules/$(c)"
+            $print clone $(c) from $from
+            system("git clone -q $from $src") == 0 or die "clone $(c) failed\n"
+            system "git -C $src remote set-url origin $url"
+        $if system("git -C $src cat-file -e $commit^{commit} 2>/dev/null") != 0
+            $print fetch $(c) $commit
+            system("git -C $src fetch -q origin $commit") == 0 or die "fetch $(c) $commit failed\n"
+        # a "build" branch, as the old scripts made (ucx records the branch name)
+        system("git -C $src checkout -q -B build $commit") == 0 or die "checkout $(c) $commit failed\n"
+        $src_dir{$(c)} = $src
+        $src_key{$(c)} = $commit
+
+# hash of the directory as in the working tree, so uncommitted edits count
+fncode: tree_hash($repo, $dir)
+    my $idx = "$opts{out}/src/.index-$$"
+    unlink $idx
+    my $t = `GIT_INDEX_FILE=$idx git -C $repo add -A -- $dir && GIT_INDEX_FILE=$idx git -C $repo write-tree --prefix=$dir/`
+    unlink $idx
+    chomp $t
+    $if $t!~/^[0-9a-f]+$/
+        die "can't hash $repo/$dir\n"
+    return $t
+
+# -- build -----------------------------------------------------------
+subcode: build_components
+    my %only
+    $if $opts{only}
+        $foreach $c in split /,/, $opts{only}
+            $only{$c} = 1
+    my @todo
+    $foreach $c in @components
+        my $key = "source: $src_key{$c}\noptions: $comp_opts{$c}\n"
+        my $stamp = "$variant_dir/$c/.mymake_built"
+        my $old
+        $if -f $stamp
+            $old = `cat $stamp`
+        $if %only and !$only{$c}
+            next
+        $if !$opts{force} and !%only and $old eq $key
+            $print "  $c: up to date"
+            next
+        push @todo, $c
+
+    # libtool first: the others don't need it, but it is quick
+    my @failed
+    $foreach $c in @todo
+        $if $c eq "libtool"
+            $if !build_one($c)
+                push @failed, $c
+    my %pid
+    $foreach $c in @todo
+        $if $c ne "libtool"
+            my $pid = fork()
+            die "fork failed\n" if !defined $pid
+            $if $pid == 0
+                exit(build_one($c) ? 0 : 1)
+            $pid{$pid} = $c
+    $while %pid
+        my $pid = wait()
+        last if $pid < 0
+        $if $? != 0
+            push @failed, $pid{$pid}
+        delete $pid{$pid}
+    $if @failed
+        $foreach $c in @failed
+            $print "== $c failed, last lines of $variant_dir/$c.log:"
+            system "tail -15 $variant_dir/$c.log"
+        die "build failed: @failed\n"
+
+fncode: build_one($c)
+    my $dir = "$variant_dir/$c"
+    $run_log = "$variant_dir/$c.log"
+    unlink $run_log
+    $print "  $c: building, log in $run_log"
+    my $ok = eval { build_one_body($c, $dir); 1 }
+    $if !$ok
+        &call open_a, $run_log
+            print Out "\n$@"
+        return 0
+    &call open_w, $dir/.mymake_built
+        print Out "source: $src_key{$c}\noptions: $comp_opts{$c}\n"
+    $print "  $c: done"
+    return 1
+
+fncode: build_one_body($c, $dir)
+        # start from a clean copy of the source, as the old scripts did
+        system "rm -rf $dir"
+        $if $c eq "libtool"
+            mkdir $dir or die "mkdir $dir: $!\n"
+        $elif $c eq "yaksa"
+            mkdir $dir or die "mkdir $dir: $!\n"
+            # tracked and untracked files, as in the working tree
+            my $n = () = "$(yaksa_dir)" =~ /\//g
+            $n += 1
+            run("git -C $opts{mpich} ls-files -z -co --exclude-standard -- $(yaksa_dir) | (cd $opts{mpich} && tar --null -T - -cf -) | tar -C $dir --strip-components=$n -xf -")
+        $else
+            run("cp -a $src_dir{$c} $dir")
+        chdir $dir or die "chdir $dir: $!\n"
+        my $extra = $comp_opts{$c}
+        $(for:a in $(module_components))
+            $case $c eq "$(a)"
+                $call recipe_$(a)
+        chdir $opts{out}
+
+# -- pack ------------------------------------------------------------
+subcode: pack_tarball
+    # like build_tarball.sh: no .git, and no *.o except for ucx; no build stamps
+    my $tar = "$opts{out}/modules-$opts{name}.tar"
+    unlink $tar, "$tar.gz"
+    chdir $variant_dir or die "chdir $variant_dir: $!\n"
+    my @others = grep { $_ ne "ucx" } @components
+    system("tar -cf $tar --exclude=.git --exclude=.mymake_built --exclude='*.o' @others") == 0 or die "tar failed\n"
+    system("tar -rf $tar --exclude=.git --exclude=.mymake_built ucx") == 0 or die "tar failed\n"
+    system("gzip $tar") == 0 or die "gzip failed\n"
+    chdir $pwd
+    $print "--> $tar.gz"
