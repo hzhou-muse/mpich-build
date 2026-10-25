@@ -1,0 +1,596 @@
+subcode: load_mpi_h(mpi_h)
+    my %mpidef
+    my (@mpidef_list, %mpidef_type)
+    push @mpidef_list, "MPI_SUCCESS"
+    &call open_r, $(mpi_h)
+	$if /^\s*#\s*define\s+(MPIX?_[A-Z_]+)\s+(.*)/ -> $name, $t
+            my $val
+            $if $t=~/\(\(\w+\)\s*(\S+)\)/
+                $val = $1
+            $elif $t=~/^(\S+)/
+                $val = $1
+
+	    $if defined $mpidef{$name}
+                $print duplicated define - $name, was $mpidef{$name}, new $val
+	    $else
+		$mpidef{$name} = $val
+                $if $name=~/MPI_ERR_\w+/
+                    push @mpidef_list, $name
+
+	$elif /^(?:typedef\s+)?enum\s+\w*\s*{\s*(.*)/ -> $enum_line
+	    # Eat until we find the closing right brace
+	    $while $enum_line !~ /}/
+	        my $l = <In>
+                chomp $l
+	        $enum_line .= $l
+
+	    $while $enum_line=~/\s*(MPIX?_\w+)\s*=\s*([a-fx0-9]*)/g
+		$mpidef{$1} = $2;
+
+    $foreach $k in keys %mpidef
+        $if $mpidef{$k} =~ /0x(\w+)/
+            $mpidef{$k} = hex($1)
+
+    $call set_aint_datatype
+    $call set_integer_kind
+    $call load_mpidef_list
+
+    subcode: set_aint_datatype
+        $(for:AINT,OFFSET,COUNT)
+            my $v = hex $mpi_h_confs->{MPI_$1_DATATYPE}
+            $mpidef{MPI_$1} = $v > 0x7fffffff ? $v - (1<<31) : $v
+    subcode: set_integer_kind
+        $mpidef{MPI_INTEGER_KIND} = $sizeof_hash{INT}
+        $mpidef{MPI_ADDRESS_KIND} = $sizeof_hash{AINT}
+        $mpidef{MPI_AINT_KIND} = $sizeof_hash{AINT}
+        $mpidef{MPI_COUNT_KIND} = $sizeof_hash{COUNT}
+        $mpidef{MPI_OFFSET_KIND} = $sizeof_hash{OFFSET}
+
+subcode: write_mpif_h(mpif_h)
+    &call open_W, $(mpif_h)
+        my $sp = ' ' x 6
+        $call dump_fortran_copyright
+        $call dump_status_etc
+        $for $k in @mpidef_list
+            $if !defined $mpidef{$k}
+                $warn mpif.h: $k missing
+            $print $sp INTEGER $k
+            $print $sp PARAMETER ($k=$mpidef{$k})
+        # f08 features
+        $foreach $a in "SUBARRAYS_SUPPORTED", "ASYNC_PROTECTS_NONBLOCKING"
+            $print "       LOGICAL MPI_$a"
+            $print "       PARAMETER(MPI_$a=.FALSE.)"
+
+        $call dump_external_routines
+        # $call dump_DLLIMPORT
+        $call dump_common_blocks
+
+    subcode: dump_status_etc
+        my $n = 5
+        $print "       INTEGER MPI_SOURCE, MPI_TAG, MPI_ERROR"
+        $print "       PARAMETER (MPI_SOURCE=3,MPI_TAG=4,MPI_ERROR=5)"
+
+        $print "       INTEGER MPI_STATUS_SIZE"
+        $print "       PARAMETER (MPI_STATUS_SIZE=$n)"
+        # common block symbols
+        $print "       INTEGER MPI_STATUS_IGNORE($n)"
+        $print "       INTEGER MPI_STATUSES_IGNORE($n,1)"
+
+        $print "       INTEGER MPI_ERRCODES_IGNORE(1)"
+
+        $print "       CHARACTER*1 MPI_ARGVS_NULL(1,1)"
+        $print "       CHARACTER*1 MPI_ARGV_NULL(1)"
+
+        $print "       INTEGER MPI_BOTTOM, MPI_IN_PLACE, MPI_UNWEIGHTED"
+        $print "       INTEGER MPI_WEIGHTS_EMPTY"
+
+    subcode: dump_DLLIMPORT
+        # When building the Fortran interface for Microsoft Windows, there 
+        # are some additional compiler directives needed 
+        # This provides a hook for any DLL import directives.  We need to 
+        # make this a configure-time variable because some compilers (in 
+        # particular, a version of the Intel Fortran compiler for Linux)
+        # will read directives for other compilers and then flag as fatal
+        # errors directives that it does not support but does recognize.
+        $print "\@DLLIMPORT\@"
+
+    subcode: dump_external_routines
+        # And the external names.  This are necessary to 
+        # ensure that these are passed as routines, not implicitly-defined 
+        # variables
+        $print "       EXTERNAL MPI_DUP_FN, MPI_NULL_DELETE_FN, MPI_NULL_COPY_FN"
+        # Note that pmpi_wtime can cause problems with some Fortran compilers
+        # if the corresponding routines aren't available (even if not used)
+        $print "       EXTERNAL MPI_WTIME, MPI_WTICK"
+        $print "       EXTERNAL PMPI_WTIME, PMPI_WTICK"
+        # Add the external names for the MPI-2 attribute functions
+        $print "       EXTERNAL MPI_COMM_DUP_FN, MPI_COMM_NULL_DELETE_FN"
+        $print "       EXTERNAL MPI_COMM_NULL_COPY_FN"
+        $print "       EXTERNAL MPI_WIN_DUP_FN, MPI_WIN_NULL_DELETE_FN"
+        $print "       EXTERNAL MPI_WIN_NULL_COPY_FN"
+        $print "       EXTERNAL MPI_TYPE_DUP_FN, MPI_TYPE_NULL_DELETE_FN"
+        $print "       EXTERNAL MPI_TYPE_NULL_COPY_FN"
+        $print "       EXTERNAL MPI_CONVERSION_FN_NULL"
+        # the time/tick functions
+        # Special option.  Some compilers (particularly IBM's xl compilers)
+        # allow the user to change the definition of the datatypes, such as
+        # making real 8 bytes and double precision 16.  To allow mpif.h
+        # to be used with such compilers, those compilers allow the
+        # use of the non-standard real*8 to force exactly 8 bytes.
+        # WARNING: REAL*8 is not standard and must not be used here. 
+        # Instead, the top level configure (in mpich/configure) will
+        # replace DOUBLE PRECISION with REAL*8 where the Fortran compiler 
+        # supports it.  
+        $print "       DOUBLE PRECISION MPI_WTIME, MPI_WTICK"
+        $print "       DOUBLE PRECISION PMPI_WTIME, PMPI_WTICK"
+        # We avoid adding the external declarations because some Fortran
+        # compilers then insist on linking with the routines, even if 
+        # they are not used.  Combined with systems that do not have weak
+        # symbols, and you can get some strange link failures.
+
+    subcode: dump_common_blocks
+        # Add the common blocks for the special constants
+
+        # Use one common block for each MPI Fortran constant to avoid possible
+        # alignment issue when different Fortran compilers are used in building
+        # the MPI libraries and compiling/linking with the user application.
+        # This does not eliminate the potential alignment warnings from the
+        # linker. Since the Fortran77 binding only needs the pointer address
+        # but never access the content of the pointer, so alignment warnings
+        # should be harmless. Alignment warnings from linker will be addressed
+        # by checking that Fortran common block alignment created in C is OK
+        # by the Fortran compiler(done at configure time for the primary compilers)
+
+        # Add the common block for the character parameter ARGVS_NULL (Fortran
+        # requires character data in a different common block than 
+        # non-character data)
+        $print $sp COMMON /MPIFCMB5/ MPI_UNWEIGHTED
+        $print $sp COMMON /MPIFCMB9/ MPI_WEIGHTS_EMPTY
+        $print $sp SAVE /MPIFCMB5/
+        $print $sp SAVE /MPIFCMB9/
+
+        $print $sp COMMON /MPIPRIV1/ MPI_BOTTOM, MPI_IN_PLACE, MPI_STATUS_IGNORE
+
+        $print $sp COMMON /MPIPRIV2/ MPI_STATUSES_IGNORE, MPI_ERRCODES_IGNORE
+        $print $sp SAVE /MPIPRIV1/,/MPIPRIV2/
+
+        $print $sp COMMON /MPIPRIVC/ MPI_ARGVS_NULL, MPI_ARGV_NULL
+        $print $sp SAVE   /MPIPRIVC/
+
+subcode: load_mpidef_list
+    subcode: push_Handle_key(T, k)
+        push @mpidef_list, "MPI_$(k)"
+        $mpidef_type{$(k)} = "$(T)"
+    subcode: push_MPI_key(k)
+        push @mpidef_list, "MPI_$(k)"
+    subcode: push_p1_key(k)
+        push @mpidef_list, "MPI_$(k)"
+        $mpidef{MPI_$(k)} += 1
+    subcode: push_s1_key(k)
+        push @mpidef_list, "MPI_$(k)"
+        $mpidef{MPI_$(k)} -= 1
+    subcode: push_prefix_key(prefix, k)
+        push @mpidef_list, "MPI_$(prefix)_$(k)"
+
+    # Compare operations
+    $map push_MPI_key, IDENT,CONGRUENT,SIMILAR,UNEQUAL
+    # Window flavor and model
+    $map push_prefix_key(WIN_FLAVOR) CREATE,ALLOCATE,DYNAMIC,SHARED
+    $map push_prefix_key(WIN) SEPARATE, UNIFIED
+    # Collective operations
+    $map push_Handle_key(Op), $(OP_SET)
+    # Objects
+    $(for:a in $(HANDLE_LIST))
+        $call push_Handle_key, $(a), $(a:uc)_NULL
+    $call push_Handle_key, Comm, COMM_WORLD
+    $call push_Handle_key, Comm, COMM_SELF
+    $call push_Handle_key, Group, GROUP_EMPTY
+    $call push_Handle_key, Info, INFO_ENV
+    $call push_Handle_key, Message, MESSAGE_NO_PROC
+    $call push_Handle_key, MPI_Errhandler, ERRORS_ARE_FATAL
+    $call push_Handle_key, MPI_Errhandler, ERRORS_RETURN
+
+    # Attributes
+    $map push_p1_key, TAG_UB, HOST, IO, WTIME_IS_GLOBAL, UNIVERSE_SIZE, LASTUSEDCODE, APPNUM, WIN_BASE, WIN_SIZE, WIN_DISP_UNIT, WIN_CREATE_FLAVOR, WIN_MODEL
+    # maximum values
+    $map push_s1_key, MAX_ERROR_STRING, MAX_PORT_NAME, MAX_OBJECT_NAME, MAX_INFO_KEY, MAX_INFO_VAL, MAX_PROCESSOR_NAME, MAX_DATAREP_STRING, MAX_LIBRARY_VERSION_STRING
+    $map push_MPI_key, UNDEFINED, KEYVAL_INVALID
+    $map push_MPI_key, BSEND_OVERHEAD, PROC_NULL, ANY_SOURCE, ANY_TAG, ROOT
+    # Topology types
+    $map push_MPI_key, GRAPH, CART, DIST_GRAPH
+    # version
+    $map push_MPI_key, VERSION, SUBVERSION
+    # Special RMA values
+    $map push_prefix_key(LOCK), EXCLUSIVE, SHARED
+
+    $call dump_datatypes
+    # Datatype combiners
+    $map push_prefix_key(COMBINER), NAMED, DUP, CONTIGUOUS, VECTOR, HVECTOR_INTEGER, HVECTOR, INDEXED, HINDEXED_INTEGER, HINDEXED, INDEXED_BLOCK, STRUCT_INTEGER, STRUCT, SUBARRAY, DARRAY, F90_REAL, F90_COMPLEX, F90_INTEGER, RESIZED, HINDEXED_BLOCK
+    # Typeclasses
+    $map push_prefix_key(TYPECLASS), REAL, INTEGER, COMPLEX
+    # RMA Asserts
+    $map push_prefix_key(MODE), NOCHECK, NOSTORE, NOPUT, NOPRECEDE, NOSUCCEED
+    # comm_split_types
+    $map push_prefix_key(COMM_TYPE), SHARED
+    # Thread values
+    $map push_prefix_key(THREAD) SINGLE, FUNNELED, SERIALIZED, MULTIPLE
+
+    # MPI-2 types: Files
+    $if !$opts{disable_romio}
+        $map push_prefix_key(MODE), RDONLY, RDWR, WRONLY, DELETE_ON_CLOSE, UNIQUE_OPEN, CREATE, EXCL, APPEND, SEQUENTIAL
+        $map push_prefix_key(SEEK), SET, CUR, END
+        $map push_prefix_key(ORDER), C, FORTRAN
+        $map push_prefix_key(DISTRIBUTE), BLOCK, CYCLIC, NONE, DFLT_DARG
+        $mpidef{MPI_DISPLACEMENT_CURRENT} = -54278278
+        $map push_MPI_key, MPI_DISPLACEMENT_CURRENT
+
+    # ----
+    subcode: dump_datatypes
+        subcode: push_dt(name)
+            $(if:name!=-)
+                $(if:name=AINT or name=OFFSET or name=COUNT)
+                    my $v = hex $mpi_h_confs->{MPI_$(name)_DATATYPE}
+                $(else)
+                    my $v = hex $mpi_h_confs->{MPI_$(name)}
+                $if $v == 0
+                    $mpidef{MPI_$(name)} = "MPI_DATATYPE_NULL"
+                $else
+                    $mpidef{MPI_$(name)} = $v > 0x7fffffff ? $v - (1<<31) : $v
+                push @mpidef_list, "MPI_$(name)"
+                $mpidef_type{"$(name)"} = "Datatype"
+        # Datatypes
+        # These are determined and set at configure time
+        $map push_dt, $(DT_ALL_SET)
+
+        # Integer kind
+        $map push_MPI_key, ADDRESS_KIND, OFFSET_KIND, COUNT_KIND, INTEGER_KIND
+
+
+subcode: write_mpi_constants_f90(f)
+    &call open_W, $(f)
+        $print MODULE MPI_CONSTANTS
+        $print IMPLICIT NONE
+        $print include 'mpifnoext.h'
+        my $sp = '    '
+        $call dump_status
+        $map dump_handle_type, $(HANDLE_LIST)
+        $(for:op in eq, ne)
+            &call interface_op, .$(op:uc).
+                $(for:a in $(HANDLE_LIST))
+                    $print ${sp}MODULE PROCEDURE $(a:lc)$(op)
+        &call contains
+            $(for:a in $(HANDLE_LIST))
+                $(for:op in eq, ne)
+                    $print ${sp}LOGICAL FUNCTION $(a)$(op)(lhs, rhs)
+                    $print ${sp}    TYPE(MPI_$(a)), INTENT(IN):: lhs, rhs
+                    $print ${sp}    $(a)$(op) = lhs%MPI_VAL .$(op:uc). rhs%MPI_VAL
+                    $print ${sp}END FUNCTION
+        $print END MODULE MPI_CONSTANTS
+
+    # --------------------
+    subcode: type(name)
+        $print ${sp}TYPE :: $(name)
+        $sp .= '    '
+        $print ${sp}SEQUENCE
+        BLOCK
+        $sp =~s/^    //
+        $print ${sp}END TYPE $(name)
+
+    subcode: interface_op(_op)
+        $print ${sp}INTERFACE OPERATOR($(_op))
+        $sp .= '    '
+        BLOCK
+        $sp =~s/^    //
+        $print ${sp}END INTERFACE
+
+    subcode: contains
+        $print ${sp}CONTAINS
+        BLOCK
+    # --------------------
+    subcode: dump_status
+        &call type, MPI_Status
+            $(for:$(status_fields))
+                $print ${sp}INTEGER :: $1
+
+    subcode: dump_handle_type(name)
+        &call type, MPI_$(name)
+            $print ${sp}INTEGER :: MPI_VAL
+
+#---------------------------------------- 
+subcode: write_f08_types(f)
+    &call open_W, $(f)
+        $call dump_fortran_copyright
+        &call dump_module, MPI_f08_types
+            $print use,intrinsic :: iso_c_binding, only: c_int
+            $print use:: mpi_c_interface_types, only: c_Count, c_Status
+            $print implicit none
+            $(for:a in $(HANDLE_LIST))
+                &call dump_type, MPI_$(a)
+                    $print "    integer:: MPI_VAL"
+            $call dump_status
+            $(for:==,/= and eq, neq)
+                &call interface, operator($1)
+                    $(for:a in $(HANDLE_LIST))
+                        $print "    module procedure MPI_$(a)_$2"
+                        $print "    module procedure MPI_$(a)_f08_$2_f"
+                        $print "    module procedure MPI_$(a)_f_$2_f08"
+                $(for:a in $(HANDLE_LIST))
+                    $print "private:: MPI_$(a)_$2"
+                    $print "private:: MPI_$(a)_f08_$2_f"
+                    $print "private:: MPI_$(a)_f_$2_f08"
+            &call interface, MPI_Sizeof
+                $(for:a in $(type_list))
+                    $print "    module procedure MPI_Sizeof_$(a)"
+            $(for:a in $(type_list))
+                $print "private:: MPI_Sizeof_$(a)"
+
+            $print contains
+            $(for: a in $(type_list))
+                $call sub_sizeof, $(a)
+            $call sub_status
+            $(for:a in $(HANDLE_LIST))
+                $call sub_handle, $(a), eq, ==
+                $call sub_handle, $(a), neq, /=
+                $call sub_handle_f2c, $(a)
+
+    subcode: sub_handle(a, eq, op)
+        &call function, MPI_$(a)_$(eq)(x, y)
+            $print "    type(MPI_$(a)), intent(in):: x,y"
+            $print "    logical:: res"
+            $print "    res = (x%MPI_VAL $(op) y%MPI_VAL)"
+
+        &call function, MPI_$(a)_f08_$(eq)_f(f08, f)
+            $print "    type(MPI_$(a)), intent(in):: f08"
+            $print "    integer, intent(in):: f"
+            $print "    logical:: res"
+            $print "    res = (f08%MPI_VAL $(op) f)"
+
+        &call function, MPI_$(a)_f_$(eq)_f08(f, f08)
+            $print "    type(MPI_$(a)), intent(in):: f08"
+            $print "    integer, intent(in):: f"
+            $print "    logical:: res"
+            $print "    res = (f08%MPI_VAL $(op) f)"
+
+    subcode: sub_handle_f2c(a)
+        &call function, MPI_$(a)_f2c(x)
+            $print "    use mpi_c_interface_types, only: c_$(a)"
+            $print "    integer, value:: x"
+            $print "    integer(c_$(a)):: res"
+            $print "    res = x"
+
+        &call function, MPI_$(a)_c2f(x)
+            $print "    use mpi_c_interface_types, only: c_$(a)"
+            $print "    integer(c_$(a)), value:: x"
+            $print "    integer:: res"
+            $print "    res = x"
+
+    macros:
+        type_list: character,logical,xint8,xint16,xint32,xint64,xreal32,xreal64,xreal128, xcomplex32,xcomplex64,xcomplex128
+
+    subcode: dump_type(T)
+        $print type, bind(C) :: $(T)
+        BLOCK
+        $print end type $(T)
+    subcode: interface(what)
+        $print interface $(what)
+        BLOCK
+        $print end interface
+    subcode: subroutine(@name)
+        $(if:name~.*(f08_assign_c|c_assign_f08))
+            $print elemental subroutine $(name)
+        $(else)
+            $print subroutine $(name)
+        BLOCK
+        $print end subroutine
+        subcode: ierror_decl
+            $print "    integer,optional, intent(out) :: ierror"
+        subcode: ierror_set
+            $print "    if (present(ierror)) ierror = 0"
+    subcode: function(@name)
+        $print function $(name) result (res)
+        BLOCK
+        $print end function
+    subcode: c_function(@name)
+        $print function $(name) bind(C, name="$(name:0:word)")  result (res)
+        BLOCK
+        $print end function
+
+    subcode: use_intrinsic(@list)
+        $(if:list~c_)
+            $print "    use,intrinsic :: iso_c_binding, only: $(list)"
+        $(else)
+            $print "    use,intrinsic :: iso_fortran_env, only: $(list)"
+    # -----
+    subcode: sub_sizeof(t)
+        &call subroutine, MPI_Sizeof_$(t)(x, size, ierror)
+            $(if:t~xint)
+                $(set:T=integer)
+                $(set:K=$(t:1:))
+            $(elif:t~xreal)
+                $(set:T=real)
+                $(set:K=$(t:1:))
+            $(elif:t~xcomplex)
+                $(set:T=complex)
+                $(set:K=real$(t:8:))
+            $(if:t~x)
+                $call use_intrinsic, $(K)
+                $print "    $(T)($(K)),dimension(..) :: x"
+            $(else)
+                $print "    $(t),dimension(..) :: x"
+            $print "    integer,intent(out) :: size"
+            $call ierror_decl
+            $print "    size = storage_size(x) / 8"
+            $call ierror_set
+
+    subcode: dump_status
+        &call dump_type, MPI_Status
+            $(for:$(status_fields))
+                $print "    integer :: $1"
+        $(for:SOURCE,TAG,ERROR,STATUS_SIZE and 3,4,5,5)
+            $print integer,parameter :: MPI_$1 = $2
+        &call interface, assignment(=)
+            my $sp = "    "
+            $print ${sp}module procedure MPI_Status_f08_assign_c
+            $print ${sp}module procedure MPI_Status_c_assign_f08
+        $print private:: MPI_Status_f08_assign_c
+        $print private:: MPI_Status_c_assign_f08
+        $print private:: MPI_Status_f_assign_c
+        $print private:: MPI_Status_c_assign_f
+    subcode: sub_status
+        $call sub, f, f08
+        $call sub, f08, f
+        $call sub, f08, c
+        $call sub, c, f08
+        $call sub, f, c
+        $call sub, c, f
+        $(for:prefix in MPI, PMPI)
+            $call mpi_sub, f08, c
+            $call mpi_sub, c, f08
+        macros:
+            f_decl:   integer,intent($1) :: status_f(MPI_STATUS_SIZE)
+            f08_decl: type(MPI_Status),intent($1) :: status_f08
+            c_decl:   type(c_Status),intent($1) :: status_c
+            f_field:  status_f($1)
+            f08_field:  status_f08%$2
+            c_field:  status_c%$2
+        subcode: sub(a, b)
+            $(if:a=c or b=c)
+                $(set:in=$(b))
+                $(set:out=$(a))
+                $(set:op=_assign_)
+                $(set:ierror=)
+            $(else)
+                $(set:in=$(a))
+                $(set:out=$(b))
+                $(set:op=2)
+                $(set:ierror=, ierror)
+            &call subroutine, MPI_Status_$(a)$(op)$(b)(status_$(a), status_$(b)$(ierror))
+                $print "    $($(in)_decl:in)"
+                $print "    $($(out)_decl:out)"
+                $(if:op=2)
+                    $call ierror_decl
+                $(for:$(status_fields))
+                    $(eval:i=$(_i)+1)
+                    $print "    $($(out)_field:$(i),$1) = $($(in)_field:$(i),$1)"
+                $(if:op=2)
+                    $call ierror_set
+        subcode: mpi_sub(a, b)
+            $(set:name=$(prefix)_Status_$(a)2$(b))
+            $(set:f08_decl=type(MPI_Status),intent($1) :: status_f08)
+            $(set:c_decl: type(MPI_Status),intent($1) :: status_c)
+            &call c_function, $(name)(status_$(a), status_$(b))
+                $call use_intrinsic, c_int
+                $print "    $($(a)_decl:in)"
+                $print "    $($(b)_decl:out)"
+                $print "    integer(c_int) :: res"
+                $print
+                $print "    status_$(b) = status_$(a)"
+                $print "    res = 0"
+
+subcode: write_f08_constants(f)
+    &call open_W, $(f)
+        $call dump_fortran_copyright
+        &call dump_module, mpi_f08_compile_constants
+            $print use,intrinsic :: iso_c_binding, only: c_int
+            $print use :: mpi_f08_types
+            $print use :: mpi_c_interface_types, only: c_Aint, c_Count, c_Offset
+            $print
+            $print private :: c_int
+            $print private :: c_Aint, c_Count, c_Offset
+            $for $k in @mpidef_list
+                $if $k=~/^MPI_DISPLACEMENT_CURRENT/
+                    $print "integer(kind=MPI_OFFSET_KIND), parameter :: $k = $mpidef{$k}"
+                $elif $mpidef_type{$k}
+                    my $T = $mpidef_type{$k}
+                    $print "type($T), parameter :: %s = $T(%d)", $k, $mpidef{$k}
+                $else
+                    $print "integer, parameter :: %20s = %d", $k, $mpidef{$k}
+
+subcode: write_f08_c_interface_types(f)
+    &call open_W, $(f)
+        $call dump_fortran_copyright
+        &call dump_module, mpi_c_interface_types
+            $print use, intrinsic:: iso_c_binding
+            $print implicit none
+            $call dump_aint_etc
+            $call dump_handle_kinds
+            $call dump_status
+
+    subcode: dump_aint_etc
+        $print integer,parameter :: c_Fint = KIND(0)
+        $(for:a in Aint,Count,Offset)
+            $print integer,parameter :: c_$(a) = $mpidef{MPI_$(a:uc)_KIND}
+    subcode: dump_handle_kinds
+        $(for:a in $(HANDLE_LIST))
+            $(if:a=File)
+                $print integer,parameter :: c_$(a) = c_intptr_t
+            $(else)
+                $print integer,parameter :: c_$(a) = c_int
+    subcode: dump_status
+        $print type, bind(c) :: c_Status
+        my $sp = "    "
+        $(for:$(status_fields))
+            $print ${sp}integer(c_int) :: $1
+        $print end type c_Status
+
+subcode: write_f08_link_constants_f90(f)
+    &call open_W, $(f)
+        $call dump_fortran_copyright
+        &call dump_module, mpi_f08_link_constants
+            $print use,intrinsic:: iso_c_binding, only: c_ptr, c_int, c_char, c_loc
+            $print use :: mpi_f08_types, only: MPI_Status
+            $print use :: mpi_c_interface_types, only: c_Status
+            $print implicit none
+            $call dump_status_ignore
+            $call dump_str_ptr, MPI_ARGV_NULL
+            $call dump_strs_ptr, MPI_ARGVS_NULL
+            $call dump_ptr, MPI_ERRCODES_IGNORE
+            $call dump_ptr_protected, MPI_UNWEIGHTED
+            $call dump_ptr_protected, MPI_WEIGHTS_EMPTY
+            $call dump_int, MPI_IN_PLACE
+            $call dump_int, MPI_BOTTOM
+
+    subcode: dump_status_ignore
+        $(for:a in STATUS_IGNORE, STATUSES_IGNORE)
+            $(set:T=type(MPI_Status)
+            $(if:a=STATUSES_IGNORE)
+                $(set:T.=, dimension(1))
+            $print $(T), bind(C, name="MPIR_F08_MPI_$(a)_OBJ"), target:: MPI_$(a)
+            $print type(c_ptr), bind(C, name="MPIR_C_MPI_$(a)") :: MPIR_C_MPI_$(a)
+            $print type(c_ptr), bind(C, name="MPI_F08_$(a)") :: MPI_F08_$(a)
+
+    subcode: dump_str_ptr(NAME)
+        $print character(len=1), dimension(1), target :: $(NAME)
+        $print type(c_ptr), bind(C, name="MPIR_C_$(NAME)") :: MPIR_C_$(NAME)
+
+    subcode: dump_strs_ptr(NAME)
+        $print character(len=1), dimension(1,1), target :: $(NAME)
+        $print type(c_ptr), bind(C, name="MPIR_C_$(NAME)") :: MPIR_C_$(NAME)
+
+    subcode: dump_ptr(NAME)
+        $print integer, dimension(1), target :: $(NAME)
+        $print type(c_ptr), bind(C, name="MPIR_C_$(NAME)") :: MPIR_C_$(NAME)
+
+    subcode: dump_ptr_protected(NAME)
+        $print integer, dimension(1), target :: $(NAME)
+        $print type(c_ptr), protected, bind(C, name="MPIR_C_$(NAME)") :: MPIR_C_$(NAME)
+
+    subcode: dump_int(NAME)
+        $print integer(c_int), bind(C, name="MPIR_F08_$(NAME)") :: $(NAME)
+
+#---------------------------------------- 
+subcode: dump_module(name)
+    $print module $(name)
+    $print
+    BLOCK
+    $print
+    $print end module $(name)
+
+subcode: dump_fortran_copyright
+    $print "!      "
+    $print "!      Copyright (C) by Argonne National Laboratory"
+    $print "!          See COPYRIGHT in top-level directory"
+    $print "!      "
+    $print "!      DO NOT EDIT"
+    $print "!      This file created by buildiface"
+    $print "!      "

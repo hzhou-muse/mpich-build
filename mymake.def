@@ -1,0 +1,275 @@
+include: macros_common/mymake.def
+
+include: macros_mymake/args.def
+include: macros_mymake/defines.def
+include: macros_mymake/custom_make.def
+include: macros_mymake/subdirs.def
+include: macros_mymake/mpich.def
+include: macros_mymake/bindings.def
+include: macros_mymake/hydra.def
+include: macros_mymake/gforker.def
+include: macros_mymake/libtool.def
+
+output_dir: ./mymake
+
+page: mymake
+    module: perl
+
+    $call set_mymake
+    $call @short_circuits
+    $call parse_args
+    $call setup_mymake
+
+    $call save_last_ARGV
+    $call @dump_args
+
+    my $python = find_python3()
+
+    my $commit = `git rev-parse --short HEAD`
+    &call open_w, MPICH_COMMIT_HASH
+        print Out "MPICH_COMMIT_HASH=$commit\n"
+    system "chmod a+x MPICH_COMMIT_HASH"
+
+    $if -f "maint/gen_binding_c.py"
+        $call autogen, src/mpi/pt2pt/send.c, $python maint/gen_binding_c.py -single-source
+    $if -f "maint/gen_abi.py"
+        $call run_script, $python maint/gen_abi.py
+    $if -f "maint/gen_ch4_api.py"
+        $call autogen, src/mpid/ch4/netmod/include/netmod.h, $python maint/gen_ch4_api.py
+    $if -f "maint/gen_coll.py"
+        $call autogen, src/mpi/coll/mpir_coll.c, $python maint/gen_coll.py
+    $if -f "src/pmi/maint/gen_pmi_msg.py"
+        chdir "src/pmi"
+        $call autogen, src/pmi_msg.h, $python maint/gen_pmi_msg.py
+        chdir "../.."
+    $if -f "src/env/mpicc.def"
+        my $mydef_page = "mydef_page"
+        $if -d "$pwd/mymake/mydef_boot"
+            $ENV{PERL5LIB} = "$pwd/mymake/mydef_boot/lib/perl5"
+            $ENV{MYDEFLIB} = "$pwd/mymake/mydef_boot/lib/MyDef"
+            $mydef_page = "$pwd/mymake/mydef_boot/bin/mydef_page"
+        chdir "src/env"
+        system "$mydef_page mpicc.def"
+        chdir "../.."
+
+    $if !$opts{disable_cxx}
+        $call autogen_cxx
+    $if !$opts{disable_fortran}
+        $call autogen_fortran
+
+    $if $opts{quick}
+        $if !-f "libtool"
+            $if -f "mymake/libtool/libtool"
+                $call patch_libtool, mymake/libtool/libtool
+            $else
+                system "perl $opts{mymake}_libtool.pl"
+        $else
+            $print "libtool" already exist.
+        $if !-f "$(mpich_config_h)"
+            system "perl $opts{mymake}_config.pl mpich"
+            system "perl $opts{mymake}_makefile.pl mpich"
+        $else
+            $print "$(mpich_config_h)" already exist.
+    $else
+        $call mpich_slow
+
+    subcode: run_script(script)
+        $print "[$(script)]"
+        system("$(script)")== 0 or die "Failed $(script)\n"
+
+    subcode: autogen(check_file, script)
+        $if !-f "$(check_file)"
+            $call run_script, $(script)
+
+    subcode: setup_mymake
+        $if !-d "mymake"
+            mkdir "mymake" or die "can't mkdir mymake\n"
+        $call pre_patch
+
+        subcode: pre_patch
+            my $cvars_c = "src/util/mpir_cvars.c"
+            $if -f "src/util/cvar/Makefile.mk"
+                $cvars_c = "src/util/cvar/mpir_cvars.c"
+            # .lo.c, the missing c file will throw off gnumake
+            #     mpir_cvars.c will gets regenerated due to the prerequisite of src/include/mpir_cvars.h
+            $if !-f $cvars_c
+                system "touch $cvars_c"
+
+    subcode: dump_args
+        $(for:moddir,prefix,device)
+            $print $1: $opts{$1}
+
+fncode: find_python3
+    $if `python -V 2>&1` =~ /Python\s*3/
+        return "python"
+    $if `python3 -V 2>&1` =~ /Python\s*3/
+        return "python3"
+
+subcode: short_circuits
+    $if $ARGV[0]=~/^(clean|errmsg|cvars|log|log_show|logs|hydra|testing|test|makefile|config|libtool)$/
+        shift @ARGV
+        system "perl $opts{mymake}_$1.pl @ARGV"
+        exit(0)
+
+macros:
+    mpich_config_h: src/include/mpichconf.h
+    mpich_makefile: Makefile
+
+#---------------------------------------- 
+include: macros_mymake/errmsgs.def
+page: mymake_errmsg
+    module: perl
+
+    $if system("grep -q 'use strict' maint/extracterrmsgs") == 0
+        my @errmsgdirs = qw(src/mpi src/mpi_t src/nameserv src/util src/binding src/include src/mpid src/pmi)
+        system "maint/extracterrmsgs @errmsgdirs > src/mpi/errhan/defmsg.h"
+    $else
+        $call load_opts
+        $call defmsg_h
+
+page: mymake_cvars
+    module: perl
+
+    $use Cwd
+    my $pwd = getcwd()
+
+    $if !-f "$pwd/maint/extractcvars.in"
+        $if !-f "$pwd/maint/extractcvars"
+            die "File not found: $pwd/maint/extractcvars.in\n"
+
+    $if -f "$pwd/maint/extractcvars.in"
+        my $dirs
+        &call open_r, maint/cvardirs.in
+            chomp
+            s/\@abs_srcdir\@/$pwd\/maint/g
+            $dirs = $_
+            last
+
+        &call open_W, mymake/extractcvars.pl
+            &call open_r, maint/extractcvars.in
+                s/\@abs_srcdir\@/$pwd\/maint/g
+                $print $_-
+
+        $print "    extractcvars..."
+        system "perl mymake/extractcvars.pl --dirs=\"$dirs\""
+    $else
+        system "perl maint/extractcvars"
+
+    $if !-f "src/include/mpir_cvars.h"
+        die "$0 failed!\n"
+
+include: macros_mymake/logstates.def
+page: mymake_logs
+    module: perl
+
+    $call load_opts
+    $call logging_states
+
+# ----------------
+page: mymake_hydra
+    module: perl
+
+    $call set_mymake
+    $if !-d "mymake"
+        mkdir "mymake" or die "can't mkdir mymake\n"
+    $(for:stage,clean)
+        push @extra_make_rules, "DO_$1 = perl $opts{mymake}_$1.pl"
+    push @extra_make_rules, ""
+    $call parse_args
+    $if -f "mymake/CFLAGS"
+        &call open_r, mymake/CFLAGS
+            $if /(.+)/
+                $ENV{CFLAGS} = $1
+            $if /(-fsanitize=\w+)/
+                $ENV{LDFLAGS} = $1
+    $call prepare_hydra
+
+# ----------------
+# print out a stage header
+page: mymake_stage
+    module: perl
+    my $t = join(' ', @ARGV)
+    $call stage, $t
+    exit(0)
+
+page: mymake_clean
+    module: perl
+
+    $if -f "mymake/opts"
+        $call load_opts
+
+    my @realclean_list
+    push @realclean_list, "subsys_include.m4"
+    push @realclean_list, "src/mpi/errhan/defmsg.h"
+    push @realclean_list, "src/include/mpir_cvars.h"
+    push @realclean_list, "src/include/mpichconf.h"
+    push @realclean_list, "Makefile"
+    push @realclean_list, "src/pm/hydra/mymake"
+    push @realclean_list, "src/pm/hydra/Makefile"
+    $if -f "src/pmi/configure.ac"
+        push @realclean_list, "src/pmi/include/pmi_config.h"
+    push @realclean_list, "src/pmi/src/pmi_msg.*"
+
+    push @realclean_list, "configure"
+    push @realclean_list, "mymake/t-*"
+    push @realclean_list, "mymake/Makefile.*"
+
+    push @realclean_list, "mymake/mpl"
+    push @realclean_list, "src/mpl/include/mplconfig.h"
+    push @realclean_list, "src/mpl/Makefile"
+    push @realclean_list, "src/pmi/include/pmi_config.h"
+    push @realclean_list, "src/pmi/Makefile"
+    push @realclean_list, "src/mpi/romio/adio/include/romioconf.h"
+    push @realclean_list, "src/mpi/romio/Makefile"
+    $if -d "src/openpa"
+        push @realclean_list, "mymake/openpa"
+
+    $if -d $opts{prefix}
+        push @realclean_list, "$opts{prefix}/lib/libmpi*"
+
+    push @realclean_list, "src/binding/c/*/*.c"
+    push @realclean_list, "src/mpid/ch4/netmod/include/netmod.h"
+    push @realclean_list, "src/mpi/coll/mpir_coll.c"
+
+    $foreach $t in @realclean_list
+        $print "rm -rf $t"
+        system "rm -rf $t"
+
+#---------------------------------------- 
+#---- stages ---------------------------- 
+subcode: stage(@name)
+    $print ---------------------------\n
+    $print -     $(name)
+    $print ---------------------------\n
+
+#---- proprocess utils ---------------- 
+macros:
+    mpi_src_dirs: mpi mpi_t nameserv util binding include mpid pmi
+
+subcode: find_files(dir, name)
+    &call open_r, find $(dir) -name '$(name)' |
+        chomp
+        push @files, $_
+
+subcode: each_ch_file
+    my @files
+    $foreach $dir in qw($(mpi_src_dirs))
+        $call find_files, src/$dir, *.[ch]
+    $foreach $f in @files
+        BLOCK
+
+subcode: each_name_file(name)
+    my @files
+    $call find_files, ., $(name)
+    $foreach $f in @files
+        BLOCK
+
+#---------------------------------------- 
+subcode: hdr_guard(name)
+    $print "#ifndef $(name:uc)_H_INCLUDED"
+    $print "#define $(name:uc)_H_INCLUDED"
+    $print
+    BLOCK
+    $print "#endif /* $(name:uc)_H_INCLUDED */"
+
+#---------------------------------------- 

@@ -1,0 +1,31 @@
+subcode: add_rule_remshell
+    $call add_rule_pm_simple, remshell
+
+subcode: add_rule_gforker
+    $call add_rule_pm_simple, gforker
+
+subcode: add_rule_pm_simple(name)
+    push @extra_make_rules,  "$(name)_OBJECTS = \\"
+    $foreach $a in qw(cmnargs process ioloop pmiserv labelout env newsession rm pmiport dbgiface simple_pmiutil)
+        push @extra_make_rules,  "    src/pm/util/$a.o \\"
+    push @extra_make_rules,  "    src/pm/$(name)/mpiexec.o"
+    push @extra_make_rules, ""
+
+    push @extra_make_rules,  "\x24($(name)_OBJECTS): src/mpl/include/mplconfig.h"
+    push @extra_make_rules, ""
+    push @extra_make_rules,  "src/pm/$(name)/mpiexec.$(name): \x24($(name)_OBJECTS) src/mpl/libmpl.la"
+    push @extra_make_rules,  "\t\@echo LINK \$\@ && \x24(LINK) -o \$\@ \x24($(name)_OBJECTS) src/mpl/.libs/libmpl.a"
+    push @extra_make_rules, ""
+
+    push @extra_make_rules,  ".PHONY: $(name)-install"
+    push @extra_make_rules,  "$(name)-install: src/pm/$(name)/mpiexec.$(name)"
+    my $bin = "\x24(PREFIX)/bin"
+    push @extra_make_rules,  "\tinstall -d $bin"
+    push @extra_make_rules,  "\tcp src/pm/$(name)/mpiexec.$(name) $bin"
+    push @extra_make_rules,  "\trm -f $bin/mpiexec  && ln -s $bin/mpiexec.$(name) $bin/mpiexec"
+    push @extra_make_rules,  "\trm -f $bin/mpirun  && ln -s $bin/mpiexec.$(name) $bin/mpirun"
+    push @extra_make_rules, ""
+
+    # hack
+    push @extra_INCLUDES, "-Isrc/pm/util"
+    push @extra_DEFS, "-DHAVE_GETTIMEOFDAY -DUSE_SIGACTION"

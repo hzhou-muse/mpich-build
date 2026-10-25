@@ -1,0 +1,188 @@
+include: macros_common/mymake/makefile.def
+include: macros_mymake/hydra.def
+include: macros_mymake/gforker.def
+
+subcode: custom_make(what)
+    # FIXME
+    $if $opts{argobots}
+        $I_list .= " -I$opts{argobots}/include"
+    $call parse_Makefile, mymake/Makefile.orig
+    $objects{MODDIR}="-"
+    $objects{PREFIX}="-"
+
+    $call collect_programs_libs
+    # $call collect_mpi_fc_modules
+
+    $call custom_programs_libs
+    $(if:what=mpich)
+        dump_makefile("mymake/Makefile.custom", "mymake")
+    $(else)
+        dump_makefile("mymake/Makefile.custom", "../../../mymake")
+
+    system "rm -f Makefile"
+    system "ln -s mymake/Makefile.custom Makefile"
+
+    # ----------------------------
+    subcode: collect_programs_libs
+        my $tlist = get_list("lib_LTLIBRARIES")
+        $foreach $t in @$tlist
+            $dst_hash{$t} = "\x24(PREFIX)/lib"
+        my $tlist = get_list("bin_PROGRAMS")
+        $foreach $t in @$tlist
+            $call @custom_programs
+            $dst_hash{$t} = "\x24(PREFIX)/bin"
+        # -------------------
+        $global @programs
+        my $tlist = get_list("PROGRAMS")
+        $foreach $t in @$tlist
+            $call @custom_programs
+            push @programs, $t
+    
+        $global @ltlibs
+        my $tlist = get_list("LTLIBRARIES")
+        $foreach $t in @$tlist
+            $call @custom_ltlibs
+            push @ltlibs, $t
+
+    subcode: custom_programs_libs
+        $(for:which in ltlibs, programs)
+            $foreach $p in @$(which)
+                my $a = $p
+                $a=~s/\.exe$//
+                $a=~s/[\.\/]/_/g
+                $(if:which=programs)
+                    my $add = $a."_LDADD"
+                $(elif:which=ltlibs)
+                    my $add = $a."_LIBADD"
+                my $t = get_make_var($add)
+                $call @set_libs_custom
+                $objects{$add} = $t
+
+        subcode:: set_libs_custom
+            $t=~s/(\S+\/)?(mpl|pmi|openpa|izem|hwloc|yaksa|json-c|libfabric|ucx)\/\S+\.la\s*//g
+            $t=~s/\@(ofilib|ucxlib|mpl_lib|hwloc_lib|yaksa_lib|pmi_lib|json_lib)\@\s*//g
+            $(if:makefile=hydra)
+                $t=~s/-lhydra/libhydra.la/g
+                $t=~s/-lpm/libpm.la/g
+
+            $(if:makefile=mpich and which=ltlibs)
+                $if ($add=~/libmpi_la_/ && $opts{have_weak}) or ($add=~/libpmpi_la_/)
+                    $t.= $L_list
+                $elif ($add=~/libmpi_abi_la_/ && $opts{have_weak}) or ($add=~/libpmpi_abi_la_/)
+                    $t.= $L_list
+                    $t =~s/libromio.la/libromio_abi.la/
+            $(elif:makefile=hydra and which=ltlibs)
+                $if $add=~/libhydra.*_la/
+                    $t.= $L_list
+
+#---------------------------------------- 
+subcode: modify_frame(@is_temp)
+    my @mod_list
+    BLOCK
+    $(if:is_temp=temporary)
+        $foreach $m in @mod_list
+            system "cp $m->[1] $m->[0]"
+
+    subcode: modify(f)
+        my $f = "$(f)"
+        my $f_ = $f
+        $f_=~s/[\.\/]/_/g
+        my @m =($f, "mymake/$f_.orig", "mymake/$f_.mod")
+        $(if:!skip_mod_list)
+            push @mod_list, \@m
+
+        system "mv $m[0] $m[1]"
+        $call get_file_lines, $m[1]
+        my $flag_skip=0
+        &call open_W, $m[2]
+            $foreach $l in @lines
+                BLOCK
+                $if $flag_skip
+                    next
+                print Out $l
+        system "cp -v $m[2] $m[0]"
+
+#---------------------------------------- 
+subcode: parse_Makefile(makefile)
+    $global %objects 
+    %objects=()
+    my $tlist
+    &call open_r, $(makefile)
+        $if /^(\w+)\s*=\s*(.*)/ -> $a, $b
+            $tlist=[]
+            $objects{$a} = $tlist
+
+            $call add_b_to_tlist
+        $elif $tlist
+            $if /\s*(.*)/ -> $b
+                $call add_b_to_tlist
+    $call @overwrite_makefile_vars
+
+    subcode: add_b_to_tlist
+        my $done=1
+        $if $b=~/\\$/
+            $done = 0
+            $b=~s/\s*\\$//
+
+        $if $b
+            push @$tlist, split /\s+/, $b
+        $if $done
+            undef $tlist
+
+#---- utils --------------------------- 
+fncode: get_list($key)
+    my @t
+    my $tlist = $objects{$key}
+    # $call @debug_get_list
+    $foreach $t in @{$objects{$key}}
+        $if $t=~/^\$\((\w+)\)$/
+            my $L = get_list($1)
+            push @t, @$L
+        $else
+            $t=~s/\$\((\w+)\)/get_make_var($1)/ge
+            push @t, $t
+    return \@t
+
+    subcode: debug_get_list
+        $(if:1)
+            $print $key: $tlist
+        $(else)
+            $if $tlist
+                $print $key: @$tlist
+            $else
+                $print $key undefined
+
+fncode: get_make_var($name)
+    my $t = $objects{$name}
+    $if $t eq "-"
+        $t = "\x24($name)"
+    $elif defined $t
+        $if ref($t) eq "ARRAY"
+            $t = join(' ', @$t)
+        $t=~s/\$\((\w+)\)/get_make_var($1)/ge
+        $t=~s/\s+/ /g
+
+        $t=~s/$opts{moddir}/\x24(MODDIR)/g
+    $elif $name=~/^am__v_\w+/
+        $t = ""
+    $else
+        $t = ""
+    $if $custom_make_vars{$name}
+        $t .= $custom_make_vars{$name}
+    return $t;
+
+fncode: get_make_objects($p)
+    my $a = $p
+    $a=~s/\.exe$//
+    $a=~s/[\.\/]/_/g
+
+    my $tlist = get_list("${a}_OBJECTS")
+    my @tlist = sort @$tlist
+    $foreach $t in @tlist
+        $t =~s/[^\/]+-//g
+    return \@tlist
+
+fncode: add_make_vars($key, $val)
+    $global %custom_make_vars
+    $custom_make_vars{$key} .= " $val"
+

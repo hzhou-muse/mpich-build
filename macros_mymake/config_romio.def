@@ -1,0 +1,77 @@
+subcode: config_init_romio
+    $config_in = "$mymake_dir/config_templates/romioconf.h"
+    $config_out = "src/mpi/romio/adio/include/romioconf.h"
+    symlink "../../../libtool", "src/mpi/romio/libtool"
+
+subcode: config_romio
+    $call ac_init, ROMIO, $version, discuss@mpich.org, romio, http://www.mpich.org/
+    $call set_config_defines
+    $call patch_mpio_h
+    # system "touch src/mpi/romio/include/mpiof.h"
+
+    subcode: set_config_defines
+        $call AC_USE_SYSTEM_EXTENSIONS
+        $(for:a in AIO_H, DIRENT_H, DLFCN_H, FCNTL_H, INTTYPES_H, LIMITS_H, MALLOC_H, MEMORY_H, MPIX_H, SIGNAL_H, STDDEF_H, STDINT_H, STDLIB_H, STRINGS_H, STRING_H, SYS_MOUNT_H, SYS_PARAM_H, SYS_STATVFS_H, SYS_STAT_H, SYS_TYPES_H, SYS_VFS_H, TIME_H, UNISTD_H) 
+            $config_defines{HAVE_$(a)} = 1
+        $(for:a in FSYNC, FTRUNCATE, GCC_ATTRIBUTE, LSTAT, MEMALIGN, READLINK, STAT, STATFS, STATUS_SET_BYTES, STATVFS, STRDUP, STRERROR, USLEEP)
+            $config_defines{HAVE_$(a)} = 1
+
+        $config_defines{LT_OBJDIR} = ".libs/"
+
+        $config_defines{HAVE_LONG_LONG_64} = 1
+        $config_defines{INT_LT_POINTER} = 1
+        $config_defines{HAVE_STRUCT_STATFS} = 1
+        $config_defines{HAVE_STRUCT_AIOCB_AIO_FILDES} = 1
+        $config_defines{HAVE_STRUCT_AIOCB_AIO_REQPRIO} = 1
+        $config_defines{HAVE_STRUCT_AIOCB_AIO_SIGEVENT} = 1
+
+        $config_defines{ROMIO_HAVE_STRUCT_STATFS_WITH_F_TYPE} = 1
+        $config_defines{ROMIO_HAVE_WORKING_AIO} = 1
+        $config_defines{ROMIO_INSIDE_MPICH} = 1
+        $config_defines{ROMIO_UFS} = 1
+        $config_defines{ROMIO_NFS} = 1
+        $config_defines{ROMIO_TESTFS} = 1
+        $config_defines{ROMIO_RUN_ON_LINUX} = 1
+
+        $config_defines{HAVE_PRAGMA_WEAK} = 1
+        $config_defines{HAVE_MULTIPLE_PRAGMA_WEAK} = 1
+        $config_defines{HAVE_WEAK_ATTRIBUTE} = 1
+        $config_defines{HAVE_WEAK_SYMBOLS} = 1
+        $config_defines{USE_WEAK_SYMBOLS} = 1
+        $config_defines{HAVE_VISIBILITY} = 1
+        $config_defines{HAVE_MPIO_CONST} = "const"
+        $config_defines{HAVE_MPI_DARRAY_SUBARRAY} = 1
+        $config_defines{HAVE_MPI_INFO} = 1
+        $config_defines{HAVE_MPI_LONG_LONG_INT} = 1
+        $config_defines{HAVE_MPI_STATUS_SET_ELEMENTS_X} = 1
+        $config_defines{HAVE_MPI_TYPE_SIZE_X} = 1
+        $config_defines{HAVE_MPIX_TYPE_IOV} = 1
+
+        $config_defines{HAVE_DECL_PWRITE} = 1
+        $config_defines{HAVE_DECL_MPI_COMBINER_HINDEXED_BLOCK} = 1
+
+    subcode: patch_mpio_h
+        my %confs
+        $confs{DEFINE_HAVE_MPI_GREQUEST} = "#define HAVE_MPI_GREQUEST 1"
+        $confs{HAVE_MPI_INFO} = "#define HAVE_MPI_INFO"
+        $confs{HAVE_MPI_DARRAY_SUBARRAY} = "#define HAVE_MPI_DARRAY_SUBARRAY"
+        autoconf_file("src/mpi/romio/include/mpio.h", \%confs)
+
+subcode: make_romio
+    my %conds
+    $conds{BUILD_BINDING} = 0
+    $conds{BUILD_ROMIO_EMBEDDED} = 1
+    $conds{MPIO_GLUE_MPICH} = 1
+    $conds{BUILD_AD_UFS} = 1
+    $conds{BUILD_AD_NFS} = 1
+    $conds{BUILD_AD_TESTFS} = 1
+    $if $opts{"enable-mpi-abi"}
+        $conds{BUILD_ABI_LIB} = 1
+        $special_targets{libromio_abi_la} = "\x24(LTCC) -DMPICH_BUILD_MPI_ABI"
+    $else
+        $conds{BUILD_MPICH_LIB} = 1
+    $autoconf_vars{mpl_includedir} = "-I../../mpl/include -I../../include"
+    $autoconf_vars{DEFINE_HAVE_MPI_GREQUEST}="#define HAVE_MPI_GREQUEST 1"
+    load_automake("src/mpi/romio/Makefile.am", \%conds)
+    dump_makefile("src/mpi/romio/Makefile")
+

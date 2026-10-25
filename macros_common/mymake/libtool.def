@@ -1,0 +1,29 @@
+# -- mymake/mymake_libtool.pl
+subcode: mymake_libtool(@extra_langs)
+    system "mkdir -p mymake/libtool"
+    chdir "mymake/libtool" or die "can't chdir mymake/libtool\n"
+
+    &call open_w, configure.ac
+        print Out "AC_INIT\n"
+        print Out "LT_INIT\n"
+        $(if:extra_langs)
+            $(for:a in $(extra_langs))
+                print Out "AC_PROG_$(a)\n"
+        print Out "LT_OUTPUT\n"
+
+    $print "Configure libtool ..."
+    system "libtoolize -iq && aclocal && autoconf > t.log"
+    $call @cache_configure
+    system "./configure --disable-static >> t.log"
+
+    subcode: cache_configure
+        $foreach $a in "stdc", "sys/types.h", "sys/stat.h", "stdlib.h", "string.h", "memory.h", "strings.h", "inttypes.h", "stdint.h", "unistd.h", "dlfcn.h"
+            my $cv = "ac_cv_header_$a"
+            $cv=~s/[\/.]/_/g
+            $ENV{$cv} = "yes"
+        
+        $(if:0)
+            $ENV{"ac_cv_prog_CC"} = $ENV{CC}
+            $foreach $a in "objdump", "ar", "strip", "ranlib", "gawk"
+                $ENV{"ac_cv_prog_".uc($a)} = $a
+

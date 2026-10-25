@@ -1,0 +1,381 @@
+macros:
+    subdir_list: mpl, pmi, opa, hwloc, izem, ucx, ofi, romio, jsonc
+
+    Dmpl: src/mpl
+    Impl: $(Dmpl)/include
+    Lmpl: $(Dmpl)/libmpl.la
+    Hmpl: $(Impl)/mplconfig.h
+
+    embed_yaksa: modules/yaksa
+    Dyaksa: yaksa
+    Iyaksa: $(Dyaksa)/src/frontend/include
+    Lyaksa: $(Dyaksa)/libyaksa.la
+    Hyaksa: $(Iyaksa)/yaksa_config.h
+
+    embed_hwloc: modules/hwloc
+    Dhwloc: hwloc
+    Ihwloc: $(Dhwloc)/include
+    Lhwloc: $(Dhwloc)/hwloc/libhwloc_embedded.la
+    Hhwloc: $(Ihwloc)/hwloc/autogen/config.h
+
+    embed_izem: modules/izem
+    Dizem: izem
+    Iizem: $(Dizem)/src/include
+    Lizem: $(Dizem)/src/libzm.la
+    Hizem: $(Iizem)/zm_config.h
+
+    embed_jsonc: modules/json-c
+    Djsonc: json-c
+    Ijsonc: $(Djsonc)
+    Ljsonc: $(Djsonc)/libjson-c.la
+    Hjsonc: $(Ijsonc)/json.h
+
+    embed_ucx: modules/ucx
+    Ducx: ucx
+    Iucx: $(Ducx)/src
+    Lucp: $(Ducx)/src/ucp/libucp.la
+    Luct: $(Ducx)/src/uct/libuct.la
+    Lucs: $(Ducx)/src/ucs/libucs.la
+    Lucm: $(Ducx)/src/ucm/libucm.la
+    Lucx: $(Lucp)
+    Hucx: $(Ducx)/config.h
+
+    embed_ofi: modules/libfabric
+    Dofi: libfabric
+    Iofi: $(Dofi)/include
+    Lofi: $(Dofi)/src/libfabric.la
+    Hofi: $(Dofi)/config.h
+
+    Dromio: src/mpi/romio
+    Iromio: $(Dromio)/include
+    Lromio: $(Dromio)/libromio.la
+    LPromio:$(Dromio)/libpromio.la
+    Lromio_abi: $(Dromio)/libromio_abi.la
+    Hromio: $(Dromio)/adio/include/romioconf.h
+
+    Dpmi: src/pmi
+    Ipmi: $(Dpmi)/include
+    Lpmi: $(Dpmi)/libpmi.la
+    Lpmiutil: $(Dpmi)/libpmiutil.la
+    Hpmi: $(Dpmi)/include/pmi_config.h
+
+#---------------------------------------- 
+subcode: need_mpl(@hydra)
+    $(if:!hydra)
+        $opts{"embed_mpl"} = 1
+        $if !$opts{quick} && !-d "$(Dmpl)/confdb"
+            $call do_cmd, cp -r confdb $(Dmpl)/
+        $call add_subdir_inc_lib, mpl
+        $call set_configure
+        $call add_subdir_make, mpl
+    $(else)
+        $I_list .= " -I../../../$(Impl)"
+        $L_list .= " ../../../$(Lmpl)"
+        push @extra_make_rules, "../../../$(Lmpl):"
+        push @extra_make_rules, "\t\x24(MAKE) -C ../../.. $(Lmpl)"
+
+    subcode: set_configure
+        my $configure = "./configure --disable-versioning --enable-embedded"
+        # $if $opts{argobots}
+        #     $configure .= " CPPFLAGS='-I$opts{argobots}/include'"
+        $if $opts{fast}
+            $configure.=" --enable-fast=$opts{fast}"
+        $foreach $t in @config_args
+            $if $t=~/--enable-(g|strict)/
+                $configure.=" $t"
+            $elif $t=~/--with(out)?-(mpl|thread-package|argobots|uti|cuda|hip|ze)/
+                $configure.=" $t"
+
+#---------------------------------------- 
+subcode: need_pmi(@hydra)
+    $(if:!hydra)
+        $if $opts{"with-pmix"}
+            my $L=$opts{"with-pmix"}
+            $I_list .= " -I$L/include"
+            $L_list .= " -L$L/lib -lpmix"
+
+        $if !$opts{"with-pmi"} and !$opts{"with-pmi1"} and !$opts{"with-pmi2"}
+            $opts{"embed_pmi"} = 1
+            system "mkdir -p $(Dpmi)/confdb && cp -r confdb/. $(Dpmi)/confdb/"
+            system "cp maint/version.m4 $(Dpmi)/"
+            $call add_subdir_inc_lib, pmi
+            $call set_configure
+            $call add_subdir_make, pmi
+        $elif $opts{"with-pmi1"}
+            my $L=$opts{"with-pmi"}
+            $I_list .= " -I$L/include"
+            $L_list .= " -L$L/lib -lpmi"
+        $elif $opts{"with-pmi2"}
+            my $L=$opts{"with-pmi2"}
+            $I_list .= " -I$L/include"
+            $L_list .= " -L$L/lib -lpmi2"
+    $(else)
+        $I_list .= " -I../../../$(Dpmi)/src"
+        # TODO: use libpmiutil.la
+        $L_list .= " ../../../$(Lpmi)"
+        push @extra_make_rules, "../../../$(Lpmi):"
+        push @extra_make_rules, "\t\x24(MAKE) -C ../../.. $(Lpmi)"
+
+    subcode: set_configure
+        my @t_env 
+        push @t_env, "FROM_MPICH=yes"
+        push @t_env, "main_top_srcdir=$pwd"
+        push @t_env, "main_top_builddir=$pwd"
+        push @t_env, "CPPFLAGS='-I$pwd/$(Impl)'"
+        $if $opts{argobots}
+            $t_env[-1] =~s/'$/ -I$opts{argobots}\/include'/
+        $if !$opts{disable_romio}
+            my $t_dir = "$pwd/$(Iromio)"
+            $t_env[-1] =~s/'$/ -I\/$t_dir'/
+        my $configure = "@t_env ./configure --enable-embedded"
+
+#---------------------------------------- 
+subcode: need_romio
+    system "mkdir -p $(Dromio)/confdb && cp -r confdb/. $(Dromio)/confdb/"
+    system "cp maint/version.m4 $(Dromio)/"
+    system "touch src/mpi/romio/include/mpio.h"
+    system "ln -sf ../mpi/romio/include/mpio.h src/include/mpio.h"
+    # # mpl
+    # &call modify, configure.ac
+    $call add_subdir_inc_lib, romio
+    $call set_configure
+    $call add_subdir_make, romio
+
+    # $dst_hash{"$(Dromio)/include/mpio.h"} = "$opts{prefix}/include"
+    # $dst_hash{"$(Dromio)/include/mpiof.h"} = "$opts{prefix}/include"
+
+    subcode: set_configure
+        my @t_env 
+        push @t_env, "FROM_MPICH=yes"
+        push @t_env, "main_top_srcdir=$pwd"
+        push @t_env, "main_top_builddir=$pwd"
+        push @t_env, "CPPFLAGS='-I$pwd/$(Impl)'"
+        $if $opts{argobots}
+            $t_env[-1] =~s/'$/ -I$opts{argobots}\/include'/
+        my $configure = "@t_env ./configure"
+        $if $opts{"enable-mpi-abi"}
+            $configure .= " --enable-mpi-abi"
+
+#---------------------------------------- 
+subcode: need_yaksa
+    $call add_subdir_inc_lib, yaksa
+    my $configure = "./configure"
+    $call add_subdir_make, yaksa
+
+#---------------------------------------- 
+subcode: need_hwloc
+    $call add_subdir_inc_lib, hwloc
+    $call set_configure
+    $call add_subdir_make, hwloc
+    $if $opts{uname}=~/Darwin/
+        add_make_vars("LDFLAGS", "-framework Foundation -framework IOKit")
+
+    subcode: set_configure
+        my $configure = "./configure --enable-embedded-mode --enable-visibility"
+
+#---------------------------------------- 
+subcode: need_izem
+    $call add_subdir_inc_lib, izem
+    my $configure = "./configure --enable-embedded"
+    $call add_subdir_make, izem
+
+#---------------------------------------- 
+subcode: need_jsonc
+    $(set:json_gen=maint/tuning/coll/json_gen.sh)
+    my $json_gen = "maint/tuning/coll/json_gen.sh"
+    $if -f "maint/json_gen.sh"
+        $json_gen = "maint/json_gen.sh"
+    $if -f $json_gen
+        system "bash $json_gen"
+        $if -d "mymake/$(Djsonc)"
+            $call add_subdir_inc_lib, jsonc
+            my $configure = "./configure"
+            $call add_subdir_make, jsonc
+
+#---------------------------------------- 
+subcode: need_ucx
+    $if !$opts{"with-ucx"} or $opts{"with-ucx"} eq "embedded"
+        my $ucxdir="$opts{moddir}/ucx"
+        $if -e "$ucxdir/need_sed"
+            $call patch_ucx_need_sed
+
+        # system "mkdir -p $opts{moddir}/$(Ducx)/config/{m4,aux}"
+        $if !$opts{quick}
+            # $call patch_configure_ucx
+
+        $call @need_ucx_embedded
+    $else
+        my $L=$opts{"with-ucx"}
+        $I_list .= " -I$L/include"
+        $if -e "$L/lib64/libucp.so"
+            $L_list .= " -L$L/lib64 -lucp -luct -lucm -lucs"
+        $else
+            $print "libucp.so NOT FOUND in $L"
+
+    subcode: need_ucx_embedded
+        $call patch_ucx_for_pgi
+        $call add_subdir_inc_lib, ucx
+        my $configure = "./configure --prefix=\x24(PREFIX) --disable-static"
+        $call add_subdir_make, ucx
+
+        subcode: patch_ucx_for_pgi
+            $if $ENV{compiler} =~ /pgi|sun/
+                &call just_modify, $opts{moddir}/$(Ducx)/src/ucs/type/status.h
+                    s/UCS_S_PACKED\s*ucs_status_t/ucs_status_t/
+
+    subcode: patch_ucx_need_sed
+        $print Patch $ucxdir ...
+        system "find $ucxdir -name '*.la' | xargs sed -i \"s,MODDIR,$ucxdir,g\""
+        system "find $ucxdir -name '*.la*' | xargs sed -i \"s,/MODPREFIX,$opts{prefix},g\""
+        system "mkdir -p $opts{prefix}/lib/ucx"
+        $ENV{LIBRARY_PATH}="$opts{prefix}/lib:$opts{prefix}/lib/ucx:$ENV{LIBRARY_PATH}"
+        $foreach $m in "ucm", "ucs", "uct", "ucp"
+            system "$ucxdir/libtool --mode=install --quiet install $ucxdir/src/$m/lib$m.la $opts{prefix}/lib"
+        my @tlist = glob("$ucxdir/modules/*.la")
+        $foreach $m in @tlist
+            &call open_r, $m
+                $if /relink_command="\(cd \S+ucx.(src.\S+);/
+                    my $dir = "$1"
+                    $m=~s/modules/$dir/
+            system "$ucxdir/libtool --mode=install --quiet install $m $opts{prefix}/lib/ucx"
+        unlink "$ucxdir/need_sed"
+
+    subcode: patch_configure_ucx
+        &call modify_frame
+            my $flag
+            &call modify, src/mpid/ch4/netmod/ucx/subconfigure.m4
+                $if $l=~/^AM_COND_IF\(\[BUILD_CH4_NETMOD_UCX\]/
+                    $flag = 1
+                    next
+                $elif $flag
+                    $if $l=~/^\]\)/
+                        $flag = 0
+                        next
+                    $elif $l=~/AC_DEFINE\(HAVE_UCP_\w+_NB,1/
+                        NOOP
+                    $else
+                        next
+
+#---------------------------------------- 
+subcode: need_ofi
+    $if !$opts{"with-libfabric"} || $opts{"with-libfabric"} eq "embedded"
+        $call @need_ofi_embedded
+    $else
+        my $L=$opts{"with-libfabric"}
+        $I_list .= " -I$L/include"
+        $if -e "$L/lib64/libfabric.so"
+            $L_list .= " -L$L/lib64 -lfabric"
+        $elif -e "$L/lib/libfabric.so"
+            $L_list .= " -L$L/lib -lfabric"
+        $else
+            $print "libfabric.so NOT FOUND in $L"
+
+    subcode: need_ofi_embedded
+        $call add_subdir_inc_lib, ofi
+        $call set_configure
+        $call add_subdir_make, ofi
+
+        subcode: set_configure
+            my $configure = "./configure --enable-embedded"
+            # $configure .= " --enable-sockets"
+            # $(set:C=$(join:--disable-$1: :psm,psm2,verbs,usnic,mlx,gni,ugni,rxm,mrail,rxd,bgq,rstream,udp,perf))
+            # $configure .= " $(C)"
+
+#---- common --------------------------- 
+subcode:: dump_make_var_custom
+    $(if:key=AM_CFLAGS or key=CPPFLAGS or key=AM_CPPFLAGS)
+        $t=~s/\@HWLOC_\S+\@\s*//
+
+subcode:: dump_make_var_custom
+    $(if:key=CPPFLAGS or key=AM_CPPFLAGS)
+        $if $makefile eq "Makefile" or $makefile eq "mymake/Makefile.custom"  # mpich
+            $t=~s/-I\S+\/(mpl|openpa|romio|izem|hwloc|yaksa|libfabric)\/\S+\s*//g
+            $t=~s/-I\S+\/ucx\/src//g
+            $t=~s/-I\S+\/json-c//g
+        $elif $makefile =~/hydra/
+            $t=~s/-I\S+\/(mpl)\/\S+\s*//g
+
+subcode: chdir_subdir(dir)
+    chdir "$(dir)" or die "can't chdir $(dir)\n"
+    BLOCK
+    chdir $pwd
+
+subcode: copy_subdir_module(dir)
+    $(if:embed_$(dir))
+        $(set:D=$opts{moddir}/$(D$(dir)))
+        $if !-d "$(D)"
+            $call do_cmd, cp -r $(embed_$(dir)) $(D)
+            $call @copy_confdb
+
+    subcode: copy_confdb
+        $(if:dir=mpl or dir=opa)
+            $if !$opts{quick}
+                $call do_cmd, cp -r confdb $(D)/
+
+subcode: add_subdir_inc_lib(name)
+    my $L=$opts{"with-$(name)"}
+    $if $L and -d $L
+        $I_list .= " -I$L/include"
+        $L_list .= " -L$L/lib -l$(name)"
+    $else
+        $(if:embed_$(name))
+            push @CONFIGS, "\x24(MODDIR)/$(H$(name))"
+            $I_list .= " -I\x24(MODDIR)/$(I$(name))"
+            $(if:name=ucx)
+                $L_list .= " \x24(PREFIX)/lib/libucp.la"
+            $(else)
+                $L_list .= " \x24(MODDIR)/$(L$(name))"
+        $(else)
+            push @CONFIGS, "$(H$(name))"
+            $I_list .= " -I$(I$(name))"
+            $L_list .= " $(L$(name))"
+
+subcode: add_subdir_make(name)
+    $(if:embed_$(name))
+        my $subdir="\x24(MODDIR)/$(D$(name))"
+        my $lib_la = "\x24(MODDIR)/$(L$(name))"
+        my $config_h = "\x24(MODDIR)/$(H$(name))"
+    $(else)
+        my $subdir="$(D$(name))"
+        my $lib_la = "$(L$(name))"
+        my $config_h = "$(H$(name))"
+    my $lib_dep = $config_h
+    $(if:name=pmi)
+        $if !$opts{disable_romio}
+            $lib_dep .= " $(Hromio)"
+        $lib_dep .= " $(Hmpl)"
+    $(elif:name=romio)
+        $lib_dep .= " $(Hmpl)"
+
+    $(if:quick)
+        $(if:name=mpl or name=pmi or name=romio or name=opa)
+            push @extra_make_rules, "$config_h:"
+            push @extra_make_rules, "\t\x24(DO_config) $(name) && \x24(DO_makefile) $(name)"
+            push @extra_make_rules, ""
+        $(if:name=opa)
+            &call add_subdir_rule_block, $subdir/src, $lib_la, $lib_dep
+                push @t, "\x24(MAKE)"
+        $(else)
+            &call add_subdir_rule_block, $subdir, $lib_la, $lib_dep
+                push @t, "\x24(MAKE)"
+        $(if:name=romio)
+            $if $opts{"enable-mpi-abi"}
+                &call add_subdir_rule_block, $subdir, $(Lromio_abi), $lib_dep
+                    push @t, "\x24(MAKE)"
+    $(else)
+        &call add_subdir_rule_block, $subdir, $config_h
+            push @t, "\x24(DO_stage) Configure $(name:uc)"
+            $if -f "$opts{moddir}/$(D$(name))/autogen.sh"
+                push @t, "sh autogen.sh"
+            $else
+                push @t, "libtoolize && autoreconf -ivf"
+            push @t, "$configure"
+            push @t, "cp $pwd/libtool ."
+        my $dep = "$config_h"
+        &call add_subdir_rule_block, $subdir, $lib_la, $lib_dep
+            push @t, "\x24(MAKE)"
+        $(if:name=romio)
+            $if $opts{"enable-mpi-abi"}
+                &call add_subdir_rule_block, $subdir, src/mpi/romio/libromio_abi.la, $lib_dep
+                    push @t, "\x24(MAKE) libromio_abi.la"
+

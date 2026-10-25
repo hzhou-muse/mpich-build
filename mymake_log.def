@@ -1,0 +1,223 @@
+output_dir: ./mymake
+
+page: mymake_log
+    module: perl
+    # arg: /home/hzhou/work/mpich-github
+    arg: /home/hzhou/work/modules/yaksa/src -clean
+
+    parse_args()
+    $if $opts{clean}
+        do_clean()
+    $else
+        add_trace()
+
+page: mymake_log_show
+    module: perl
+    my ($log, $rank) = ($ARGV[0], $ARGV[1])
+    my $indent = 0
+    my @stack
+    &call open_r, $log
+        # [3] Entering MPIR_Wait_impl             (src/mpi/request/wait.c:28)
+        $if /^\[$rank\] Entering (\w+)(.*)/ -> $name, $tail
+            print ". " x $indent , "Entering $name$tail\n"
+            $indent++
+            push @stack, $name
+        $elif /^\[$rank\] Exit\s+(\w+)(.*)/ -> $name, $tail
+            $while @stack
+                $indent--
+                my $t = pop @stack
+                $if $t eq $name
+                    last
+            print ". " x $indent , "Exit     $name$tail\n"
+        $elif /^\[$rank\] (.*)/
+            print '. ' x $indent, "$1\n"
+        $elif /^\[\d+\]/
+            # skip
+        $else
+            print '. ' x $indent, $_
+
+#---------------------------------------- 
+fncode: parse_args
+    $global %opts, %exclusions
+    $call load_conf
+    my @un_recognized
+    $foreach $a in @ARGV
+        $if $a=~/^-(\w+)=(.*)/
+            $opts{$1} = $2
+        $elif $a=~/^-(\w+)/
+            $opts{$1} = 1
+        $elif -d $a
+            $opts{subdir} = $a
+        $elif -f $a
+            $if $opts{files}
+                push @{$opts{files}}, $a
+            $else
+                $opts{files} = [$a]
+        $else
+            push @un_recognized, $a
+    $if @un_recognized
+        usage()
+        die "Unrecognized options: @un_recognized\n"
+
+    subcode: load_conf
+        $if -e "mymake_log.conf"
+            &call open_r, "mymake_log.conf"
+                $if /^exclude:\s*(.+)/
+                    $foreach $a in split /\s+/, $1
+                        $exclusions{$a} = 1
+
+fncode: usage
+    $print "Usage: $0 [-option] [subdir]\n"
+
+fncode: add_trace
+    $call get_files
+    $print "Add tracing logs: checking $n files..."
+    &call foreach_files, $got_function, $stage, $last_line, $ret_type
+        $(set:TYPE=[^#\s].*)
+        $if /^($(TYPE))\s+(\w+)\s*\(.*\)\s*$/
+            ($ret_type, $got_function) = ($1, $2)
+            goto next_line
+        $elif /^($(TYPE))\s+(\w+)\s*\(.*$/
+            ($ret_type, $got_function) = ($1, $2)
+            goto next_line
+        $elif /^{/ && $got_function && filter_func($got_function)
+            my $l = ["{\n"]
+            log_enter($got_function, $l)
+            push @lines, $l
+            $stage = 1
+            $count++
+            goto skip_line
+        $elif /^}/ and $stage && $ret_type=~/void/ and $last_line !~/return/
+            my $l = []
+            log_exit($got_function, $l, "    ", undef, 0)
+            push @lines, $l
+            $count++
+            # end $got_function
+        $elif /^(\s+)return.*;$/ && $stage
+            my $sp = $1
+            my $l = []
+            $call check_brace
+            log_exit($got_function, $l, $sp, $_, $add_brace)
+            push @lines, $l
+            $count += @$l -1
+            goto skip_line
+
+        $if /^[^#\s]/
+            # exits function when encounter a starting non-space
+            undef $got_function
+            undef $stage
+
+        next_line:
+        push @lines, $_
+        skip_line:
+        $last_line = $_
+
+    subcode: check_brace
+        my $add_brace
+        $if $last_line=~/\b(if\s*\(.*\)|else)\s*$/
+            $add_brace = 1
+
+    # ------------------
+    subcode: get_files
+        my $subdir = $opts{subdir}
+        my @excl_dirs
+        $if !$subdir
+            $subdir = "src"
+            push @excl_dirs, qw(binding cross env glue nameserv openpa packaging pm pmi)
+        my $cmd = "find $subdir"
+        $foreach $d in @excl_dirs
+            $cmd .= " -path $subdir/$d -prune -o"
+        $cmd .= " -name '*.[ch]'"
+        $call get_cmd_files
+
+#---------------------------------------- 
+subcode: get_cmd_files
+    my @files;
+    $if $opts{files}
+        @files = @{$opts{files}}
+    $else
+        # $print get_cmd_files [$cmd]
+        &call open_r, "$cmd |"
+            chomp;
+            push @files, $_;
+    my $n = @files
+
+subcode: foreach_files(@state_vars)
+    my $file_count = 0
+    my $change_count = 0
+    $foreach $f in @files
+        my (@lines, $count)
+        $(if:state_vars)
+            my ($(state_vars))
+        &call open_r, $f
+            BLOCK
+        $if $count > 0
+            $file_count++
+            $change_count+=$count
+            dump_lines_out(\@lines, $f)
+    $print Updated $file_count files, $change_count places
+
+#---------------------------------------- 
+fncode: filter_func($funcname)
+    $if $opts{prefix} =~ /^[A-Z_]+/
+        return ($funcname=~/^$opts{prefix}_/)
+    $else
+        return 1
+
+fncode: do_clean
+    $call get_files
+    $print "Remove tracing logs: checking $n files..."
+    &call foreach_files
+        $if /^\s*.\* MPIR_FUNC \*\//
+            # delete
+            $count++
+        $else
+            push @lines, $_
+
+    subcode: get_files
+        my $subdir = $opts{subdir}
+        $if !$subdir
+            $subdir = "src"
+        my $cmd = "find $subdir -name '*.[ch]' | xargs grep -l -F '/* MPIR_FUNC */'"
+        $call get_cmd_files
+
+subcode: _autoload
+    $global $mark = "/* MPIR_FUNC */"
+
+fncode: log_enter($funcname, $l)
+    $if !$exclusions{$funcname}
+        push @$l, "    $mark printf(\"Entering $funcname \t\t(%s:%d)\\n\", __FILE__, __LINE__);\n"
+        # push @$l, "    $mark printf(\"Entering $funcname\\n\");\n"
+    $else
+        $print Exclude $funcname
+
+fncode: log_exit($funcname, $l, $sp, $ret, $add_brace)
+    $if !$exclusions{$funcname}
+        $if $add_brace
+            push @$l, $sp."$mark {\n"
+        push @$l, $sp."$mark printf(\"Exit     $funcname\\n\");\n"
+        push @$l, $ret
+        $if $add_brace
+            push @$l, $sp."$mark }\n"
+    $else
+        push @$l, $ret
+
+/*
+fncode: log_enter($funcname, $l)
+    my $ID = uc($got_function)
+    push @$l, "    MPIR_FUNC_${verbose}_STATE_DECL($ID);\n"
+    push @$l, "    MPIR_FUNC_${verbose}_ENTER($ID);\n"
+
+fncode: log_exit($funcname, $sp, $l)
+    my $ID = uc($got_function)
+    push @$l, $sp."MPIR_FUNC_${verbose}_EXIT($ID);\n"
+*/
+
+fncode: dump_lines_out($lines, $file)
+    &call open_w, $file
+        $foreach $l in @$lines
+            $if ref($l) eq "ARRAY"
+                $foreach $ll in @$l
+                    print Out $ll
+            $else
+                print Out $l

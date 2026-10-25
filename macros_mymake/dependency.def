@@ -1,0 +1,30 @@
+macros:
+    pt2pt_send_objs:: send, isend, rsend, irsend, ssend, issend
+    pt2pt_send_objs:: send_init, rsend_init, ssend_init, bsend_init
+    pt2pt_send_objs:: sendrecv, sendrecv_rep, bsendutil
+    other_send_objs:: coll/helper_fn, request/cancel, init/init_async
+
+    pt2pt_recv_objs:: recv, irecv, mrecv, imrecv, recv_init
+    pt2pt_recv_objs:: sendrecv, sendrecv_rep
+    other_recv_objs:: coll/helper_fn, request/cancel, request/mpir_request, init/init_async
+
+    pt2pt_probe_objs: probe, iprobe, mprobe, improbe
+    other_probe_objs: coll/helper_fn
+
+subcode: add_ch4_dep
+    $map add_objects, send, recv, probe
+
+    subcode: add_objects(op)
+        push @extra_make_rules, "$(op)_OBJECTS = \\"
+        $foreach $a in $(pt2pt_$(op)_objs:quotelist)
+            push @extra_make_rules, "    src/mpi/pt2pt/$a.lo \\"
+        $foreach $a in $(other_$(op)_objs:quotelist)
+            push @extra_make_rules, "    src/mpi/$a.lo \\"
+        $extra_make_rules[-1] =~s/\s\\$//
+        push @extra_make_rules, ""
+
+        my $dep = "src/mpid/ch4/src/ch4_$(op).h"
+        $if $opts{device}=~/ofi/
+            $dep .= " src/mpid/ch4/netmod/ofi/ofi_$(op).h"
+        push @extra_make_rules, "\x24($(op)_OBJECTS): $dep"
+        push @extra_make_rules, ""

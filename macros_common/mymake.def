@@ -1,0 +1,24 @@
+subcode: _autoload
+    $global %opts
+
+    $use Cwd
+    my $pwd=getcwd()
+    my $mymake_dir = Cwd::abs_path($0)
+    $mymake_dir=~s/\/[^\/]+$//
+
+    # defaults
+    $opts{prefix} = "$pwd/_inst"
+
+# -- %opts --
+subcode: save_opts
+    $opts{config_args} = join(' ', @config_args)
+    &call open_w, mymake/opts
+        $foreach $k in sort keys %opts
+            print Out "$k: $opts{$k}\n"
+
+subcode: load_opts
+    $if -e "mymake/opts"
+        &call open_r, mymake/opts
+            $if /^(\S+): (.*)/
+                $opts{$1} = $2
+

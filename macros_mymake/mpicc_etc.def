@@ -1,0 +1,109 @@
+subcode: load_maint_version
+    $global $version
+    &call open_r, "maint/version.m4"
+        $if /m4_define\(\[MPICH_VERSION_m4\],\[(.*)\]/
+            $version = $1
+            last
+
+subcode: patch_mpicc_etc
+    my %confs
+    $confs{BASH_SHELL} = "/bin/bash"
+    $confs{LDFLAGS} = $ENV{LDFLAGS}
+    $if $opts{"with-cuda"}
+        my $p = $opts{"with-cuda"}
+        $confs{LDFLAGS} .= "  -Wl,-rpath -Wl,$p/lib64"
+    $elif $opts{"with-hip"}
+        my $p = $opts{"with-hip"}
+        $confs{LDFLAGS} .= "  -Wl,-rpath -Wl,$p/lib64"
+    $confs{LIBS} = $ENV{LIBS}
+
+    $if $opts{"enable-mpi-abi"}
+        $confs{DEFAULT_MPI_ABI} = "yes"
+        $confs{MPILIBNAME} = "mpi_abi"
+        $confs{PMPILIBNAME} = "pmpi_abi"
+    $else
+        $confs{DEFAULT_MPI_ABI} = "no"
+        $confs{MPILIBNAME} = "mpi"
+        $confs{PMPILIBNAME} = "pmpi"
+        $confs{MPIABILIBNAME} = "mpi_abi"
+
+    $if $opts{cc_weak} eq "no"
+        $confs{LPMPILIBNAME} = "-lpmpi"
+    $else
+        $confs{LPMPILIBNAME} = ""
+    $confs{MPICH_VERSION} = $version
+    $confs{CC} = $opts{CC}
+    $confs{CXX} = $opts{CXX}
+    $confs{FC} = $opts{FC}
+    $confs{FCINC} = "-I"
+    $confs{with_wrapper_dl_type} = "runpath"
+    $confs{INTERLIB_DEPS} = "yes"
+    $confs{MPIFCLIBNAME} = "mpifort"
+
+    $(for:C,CPP,LD)
+        $confs{WRAPPER_$1FLAGS}=""
+    $confs{WRAPPER_LIBS} = ""
+
+    $if $opts{CFLAGS}=~/-fsanitize=(address|undefined)/
+        $confs{WRAPPER_CFLAGS} .= " -fsanitize=$1"
+
+    $confs{WRAPPER_EXTRA_F77_FLAGS} = "-fallow-argument-mismatch"
+
+    # libmpi(_abi) for mpifort, as MPICH's configure exports to the binding
+    my $mpilib = "mpi"
+    $if $opts{"enable-mpi-abi"}
+        $mpilib = "mpi_abi"
+    $confs{mpi_dependency_libs} = "-l$mpilib"
+    $if $opts{do_pmpi}
+        $confs{mpi_dependency_libs} .= " -lp$mpilib"
+
+    $call load_shlib_conf
+    $confs{PREFIX}=$opts{prefix}
+    $confs{EXEC_PREFIX}="$opts{prefix}/bin"
+    $confs{SYSCONFDIR}="$opts{prefix}/etc"
+    $confs{INCLUDEDIR}="$opts{prefix}/include"
+    $confs{LIBDIR}="$opts{prefix}/lib"
+
+    $foreach $p in "cc", "cc_abi", "cxx", "f77", "fort"
+        my $P = uc($p)
+        $(for:C,CPP,LD)
+            $confs{"MPICH_MPI${P}_$1FLAGS"}=""
+        $confs{"MPICH_MPI${P}_LIBS"}=""
+
+        my $script = "src/env/mpi$p.bash.in"
+        $if $p eq "fort"
+            $if !-f $script
+                $script = "src/binding/fortran/env/mpifort.bash.in"
+        $if $opts{sh}
+            $script =~ s/bash/sh/
+        $if -f $script
+            $call get_file_lines, $script
+            &call open_W, mymake/mpi$p
+                $foreach $l in @lines
+                    $if $l=~/cxxlibs="-l"/
+                        print Out "    cxxlibs=\n"
+                        next
+                    $l=~s/\@(\w+)\@/$confs{$1}/g
+                    $l=~s/__(\w+)_TO_BE_FILLED_AT_INSTALL_TIME__/$confs{$1}/
+                    print Out $l
+        $else
+            $print "skip mpi$p ..."
+
+    subcode: load_shlib_conf
+        my $tag="cc"
+        &call open_r, libtool
+            $if /^wl=/
+                $confs{"${tag}_shlib_conf"} .= $_
+            $if /^hardcode_libdir_flag_spec=/
+                $confs{"${tag}_shlib_conf"} .= $_
+                $call load_new_dtags, $confs{"${tag}_shlib_conf"}
+            $elif /# ### BEGIN LIBTOOL TAG CONFIG: (\w+)/
+                $tag = lc($1)
+
+    subcode: load_new_dtags(a)
+        $if $opts{uname}=~/Linux/i
+            # TODO: check $LD --help
+            my $dtags="enable_dtags_flag=\"\\\$wl--enable-new-dtags\"\n"
+            $dtags  .="disable_dtags_flag=\"\\\$wl--disble-new-dtags\"\n"
+            $(a) .= $dtags
+

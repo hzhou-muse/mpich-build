@@ -1,0 +1,105 @@
+include: macros_common/mymake.def
+
+output_dir: ./mymake
+
+page: mymake_sync_headers
+    module: perl
+
+    my $mpich_repo = "$ENV{HOME}/work/mpich-github"
+    $if !-d $mpich_repo
+        die "MPICH repo not found at $mpich_repo\n"
+
+    # clone main branch into a temporary working copy
+    my $mpich_dir = "$pwd/mpich-checkout"
+    print "Cloning $mpich_repo (main branch) into $mpich_dir ...\n"
+    system "rm -rf $mpich_dir"
+    system("git clone --branch main --single-branch --depth 1 $mpich_repo $mpich_dir") == 0 or die "git clone failed\n"
+
+    # generate stubs needed by autoheader
+    $call create_stubs
+
+    my $template_dir = $mymake_dir . "/config_templates"
+    $if !-d $template_dir
+        mkdir $template_dir or die "Can't mkdir $template_dir: $!\n"
+
+    # -- mapping: configure.ac dir => (generated .h.in path, template name) --
+    my @headers
+    # main mpich
+    push @headers, [".", "src/include/mpichconf.h.in", "mpichconf.h"]
+    # MPL
+    push @headers, ["src/mpl", "include/config.h.in", "mplconfig.h"]
+    # PMI
+    push @headers, ["src/pmi", "include/pmi_config.h.in", "pmi_config.h"]
+    # ROMIO
+    push @headers, ["src/mpi/romio", "adio/include/romioconf.h.in", "romioconf.h"]
+    # Hydra
+    push @headers, ["src/pm/hydra", "hydra_config.h.in", "hydra_config.h"]
+    # test/mpi
+    push @headers, ["test/mpi", "include/mpitestconf.h.in", "mpitestconf.h"]
+    # dtpools
+    push @headers, ["test/mpi/dtpools", "dtpoolsconf.h.in", "dtpoolsconf.h"]
+    # standalone Fortran binding
+    push @headers, ["src/binding/fortran", "mpifort_config.h.in", "mpifort_config.h"]
+
+    $foreach $h in @headers
+        my ($subdir, $header_in, $template_name) = @$h
+        my $acdir = "$mpich_dir/$subdir"
+        $if !-f "$acdir/configure.ac"
+            warn "Skipping $subdir: no configure.ac\n"
+            next
+
+        print "Processing $subdir ...\n"
+
+        # ensure confdb dir exists so aclocal accepts AC_CONFIG_MACRO_DIR
+        my $local_confdb = "$acdir/confdb"
+        my $need_confdb = (!-e $local_confdb && $subdir ne ".")
+        $if $need_confdb
+            mkdir $local_confdb or warn "mkdir: $!\n"
+
+        # run aclocal + autoheader in the configure.ac directory
+        my $old_dir = getcwd()
+        chdir $acdir or die "Can't chdir $acdir: $!\n"
+        system("aclocal -I $mpich_dir/confdb 2>&1")
+        my $rc = system("autoheader 2>&1")
+        chdir $old_dir
+
+        # clean up
+        $if $need_confdb
+            rmdir $local_confdb
+
+        $if $rc != 0
+            warn "  autoheader failed for $subdir, skipping\n"
+            next
+
+        my $src = "$acdir/$header_in"
+        my $dst = "$template_dir/$template_name"
+        $if !-f $src
+            warn "  Expected $header_in not found, skipping\n"
+            next
+
+        # copy the file
+        system "cp $src $dst"
+        print "  $template_name updated\n"
+
+    # record the commit base, e.g. to compare with the tree being built
+    my $commit = `git -C $mpich_dir log -1 --format="%H %cs %s"`
+    my $autoconf = `autoconf --version | head -1`
+    &call open_W, $template_dir/STAMP
+        print Out "commit: $commit"
+        print Out "autoconf: $autoconf"
+    print "STAMP: $commit"
+
+    # clean up
+    system "rm -rf $mpich_dir"
+    print "\nDone.\n"
+
+subcode: create_stubs
+    # version.m4 - needed by romio, hydra, test/mpi, fortran
+    # copy from maint/version.m4 to each subdir that needs it
+    $foreach $d in "src/mpi/romio", "src/pm/hydra", "test/mpi", "src/binding/fortran"
+        system "cp $mpich_dir/maint/version.m4 $mpich_dir/$d/version.m4"
+    # subsys_include.m4 - needed by main configure.ac
+    my $old_dir = getcwd()
+    chdir $mpich_dir or die "Can't chdir $mpich_dir: $!\n"
+    system "perl maint/gen_subcfg_m4"
+    chdir $old_dir

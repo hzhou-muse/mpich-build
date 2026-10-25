@@ -1,0 +1,119 @@
+include: macros_common/mymake.def
+include: macros_mymake/args.def
+
+output_dir: ./mymake
+
+page: mymake_test
+    module: perl
+    $use Cwd
+    my $pwd = getcwd()
+
+    $call collect_all
+    $foreach $am in @all_makefile_ams
+        $if $am=~/(.*)\/Makefile.am/ -> $dir
+            chdir $dir
+            $call load_makefile_am
+            $call dump_makefile
+            chdir $pwd
+
+    subcode: collect_all
+        my $cmd = "find test/mpi -name Makefile.am"
+        my @all_makefile_ams
+        &call open_r, $cmd |
+            $if /^test.mpi.(util|dtpools)/
+                #skip
+            $elif /^(test.mpi.*Makefile.am)/
+                push @all_makefile_ams, $1
+
+    subcode: load_makefile_am
+        my $type
+        my @prog_list
+        my (%prog_flags, %prog_source)
+        &call open_r, Makefile.am
+            $if /^include .*Makefile_single.mtest/
+                $type = "single"
+            $elif /^noinst_PROGRAMS\s*=(.*)/
+                my @all
+                my $t = $1
+                $while $t=~/(.*)\\$/
+                    push @all, $1
+                    $t = <In>
+                push @all, $1
+                my $t = join ' ', @all
+                $t=~s/^\s+//g
+                $t=~s/\s+$//g
+                @prog_list = split /\s+/, $t
+            $elif /^(\w+)_CPPFLAGS\s*=\s*(.*)/
+                $prog_flags{$1} = $2
+            $elif /^(\w+)_SOURCES\s*=\s*(.*)/
+                $prog_source{$1} = $2
+
+    subcode: dump_makefile
+        $if $type
+            $print " --> $dir/Makefile"
+            &call open_w, Makefile
+                $(set:print_to=Out)
+                $print "all: @prog_list\n\n"
+                $foreach $a in @prog_list
+                    my $source = $prog_source{$a}
+                    $if !$source
+                        $source = "$a.c"
+                    $print "$a: $source\n"
+                    $print "\tmpicc -o $a $source\n\n"
+
+#---------------------------------------- 
+page: mymake_testing
+    module: perl
+
+    $call load_opts
+    $call prepare_testing
+
+subcode: prepare_testing
+    my $dir = "test/mpi"
+    my $srcdir="../.."
+    chdir $dir or die "Can't chdir $dir\n"
+    $if !-d "mymake"
+        mkdir "mymake" or die "Can't mkdir mymake\n"
+
+    system "which mpicc"
+
+    $call @testing_config
+    $call echo_system, "cp Makefile mymake/Makefile.orig"
+
+subcode: run_tests
+    $call echo_system, "make testing"
+
+subcode: run_tests_custom
+    my $dir="."
+    $if $0=~/(.*)\//
+        $dir=$1
+    $call echo_system, "perl $dir/runtests.pl -tests=testlist.custom -junitfile=summary.junit.xml"
+
+# --------------------------------
+subcode: testing_config
+    $call echo_system "mkdir -p confdb && cp -r $srcdir/confdb/. confdb/"
+    $call echo_system "mkdir -p dtpools/confdb && cp -r $srcdir/confdb/. dtpools/confdb/"
+    $call echo_system "cp $srcdir/maint/version.m4 ."
+    $call echo_system "sh autogen.sh"
+    $call echo_system "autoreconf -ivf"
+    $call @set_config_args
+    $call echo_system "./configure $config_args"
+
+    $call echo_system "cp Makefile mymake/Makefile.orig"
+
+    subcode: set_config_args
+        my $config_args = ""
+        $foreach $t in split /\s+/, $opts{config_args}
+            $if $t=~/--(dis|en)able-.*tests/
+                $config_args .= " $t"
+            $elif $t=~/--(dis|en)able-(fortran|cxx|romio)/
+                $config_args .= " $t"
+            $elif $t=~/--with-(thread-package|argobots|cuda|ze)/
+                $config_args .= " $t"
+            $elif $t=~/--enable-mpi-abi/
+                $config_args .= " $t"
+
+subcode: echo_system(@cmd)
+    my $cmd = $(cmd)
+    $print ": $cmd"
+    system($cmd) == 0 or die "    [$cmd] failed.\n"

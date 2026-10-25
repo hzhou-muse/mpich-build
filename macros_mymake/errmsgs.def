@@ -1,0 +1,251 @@
+macros:
+    dir: src/mpi/errhan
+
+subcode: defmsg_h
+    # $(set:skip_usage=1)
+    $call get_classnames
+    &call each_name_file, errnames.txt
+        $call get_errnames, $f
+    $(if:!skip_usage)
+        $call load_err_patterns
+        &call each_ch_file
+            $call get_err_usage, $f
+        # src/util/mpir_cvars.c
+        $generics{"**envvarparse"}++
+        $specifics{"**envvarparse %s"}++
+        $generics{"**cvar_val"}++
+        $specifics{"**cvar_val %s %s"}++
+        # src/binding/fortran/mpif_h/addressf.c
+        $generics{"**inttoosmall"}++
+        $generics{"**notcstatignore"}++
+        $generics{"**notfstatignore"}++
+
+    my @sorted_generics=sort keys %generics
+    my @sorted_specifics=sort keys %specifics
+    $call gen_defmsg_h
+
+    # -----------------------
+    subcode: get_classnames
+        my (@classnames, %generics)
+        &call open_r, $(dir)/baseerrnames.txt
+            $if /^(MPI\S+)\s*(\d+)\s*(.*)/ -> $class, $id, $name
+                $name=~s/#.*$//
+                $classnames[$id]=$name
+                $generics{$name}++
+
+    # -----------------------
+    subcode: get_errnames(f)
+        $global %errnames, %generics, %specifics
+        &call open_r, $(f)
+            $if /^(\*\*[^:]+):(.*)/ -> $name, $repl
+                # $print $(f): $name - $repl
+                $while $repl=~/\s*\\\s*$/
+                    $repl=$`;
+                    $_=<In>
+                    chomp
+                    $repl = $`." ".$_
+                $errnames{$name}=$repl
+                $(if:skip_usage)
+                    $if $repl!~/%/
+                        $generics{$name}++
+                    $specifics{$name}++
+    #----------------------
+    subcode: gen_defmsg_h
+        &call open_W, $(dir)/defmsg.h
+            &call if_gt_class
+                $call @struct_msgpair
+            &call if_msg_class
+                $call @class_longnames
+            &call if_gt_class
+                $call @gen_short_long, generic
+            &call if_gt_generic
+                $call @gen_short_long, specific
+
+            &call if_gt_class
+                $call @class_generic_index
+        # ------------------------
+        subcode: struct_msgpair
+            $(set:cui=const unsigned int)
+            $(set:cs=const char)
+            $print typedef struct msgpair {
+            $print "    $(cui) sentinal1;"
+            $print "    $(cs) *short_name;"
+            $print "    $(cs) *long_name;"
+            $print "    $(cui) sentinal2;"
+            $print "} msgpair;"
+        # -------------------------
+        subcode: class_longnames
+            my $n = @classnames
+            $print "#define MPIR_MAX_ERROR_CLASS_INDEX $n"
+            $print "$(sc:char) *classToMsg[] = {"
+            $foreach $i,$name in @classnames
+                $print "    \"$errnames{$name}\", /* $i $name */"
+            $print "    NULL"
+            $print "};"
+
+        subcode: class_generic_index
+            $call get_generic_index
+            my $n = @classnames
+            $print "#define MPIR_MAX_ERROR_CLASS_INDEX $n"
+            $print "static int class_to_index[] = {"
+            $for $i,$name in @classnames
+                $print $generic_index{$name}-
+                $if $i<$n-1
+                    $print ,-
+                $if $i % 10 == 9
+                    $print
+            $print "};"
+            # ---------------------
+            subcode: get_generic_index
+                $global %generic_index
+                $for $i,$name in @sorted_generics
+                    $generic_index{$name}=$i
+
+        subcode: gen_short_long(which)
+            $(if:which=generic)
+                $print "/* The names are in sorted order, allowing the use of a simple"
+                $print "   linear search or bisection algorithm to find the message corresponding to"
+                $print "   a particular message."
+                $print "*/"
+                $(set:gen=gen)
+            $(else)
+                $(set:gen=spc)
+            
+            my $n = @sorted_$(which)s
+            $print "static const int $(which)_msgs_len = $n;"
+            $for $_i,$name in @sorted_$(which)s
+                $(set:s=static const char $1_$(gen)$_i\[\])
+                $if defined $errnames{$name}
+                    $print "$(s:short) = \"$name\";"
+                    $print "$(s:long) = \"$errnames{$name}\";"
+                $else
+                    warn "missing: $name\n"
+                    $print "$(s:short) = \"$name\";"
+                    $print "$(s:long)  = \"$name (missing description)\";"
+
+            $print "static const msgpair $(which)_err_msgs[] = {"
+            $for $i=0:$n
+                $(set:s1=0xacebad03)
+                $(set:s2=0xcb0bfa11)
+                my $sep=","
+                $if $i==$n-1
+                    $sep=""
+                $print "  { $(s1), short_$(gen)$i, long_$(gen)$i, $(s2) }$sep"
+            $print "};"
+        #---------------------------------
+        macros:
+            sc: static const $1
+            lvl: MPICH_ERROR_MSG_LEVEL
+            val: MPICH_ERROR_MSG_$1
+        subcode: if_msg_class
+            $print #if $(lvl) == $(val:_CLASS)
+            BLOCK
+            $print #endif\n\n
+        subcode: if_gt_class
+            $print #if $(lvl) > $(val:_CLASS)
+            BLOCK
+            $print #endif\n\n
+        subcode: if_gt_generic
+            $print #if $(lvl) > $(val:_GENERIC)
+            BLOCK
+            $print #endif\n\n
+
+#---------------------------------------- 
+subcode: get_err_usage(f)
+    &call open_r, $(f)
+        $call ignore_mpir_err_h
+        $call skip_fn_def
+        $if /(MPI[OUR]_E\w+)\s*(\(.*)$/ -> $name, $args
+            $if !$KnownErrRoutines{$name}
+                next
+            $while 1
+                $if $args=~/^\((.*)\);/
+                    $args=$1
+                    last
+                $args=~s/\\$// # macros
+                $_=<In>
+                chomp
+                $args.=' '.$_
+            $if $args=~/"(\*\*\w+)"/
+                $generics{$1}++
+            $if $args=~/"(\*\*\w+ [^"]*)"/
+                $specifics{$1}++
+
+    subcode: ignore_mpir_err_h
+        $if /\/\*\s+--BEGIN ERROR MACROS--/
+            $while <In>
+                $if /--END ERROR MACROS--/
+                    last
+            next
+    subcode: skip_fn_def
+        $if /int\s+MPI[OUR]_Err_create_code/
+            next
+
+fncode: arg_split($t)
+    my @strs
+    $while $t=~/(.*)("(?:[^\\]|\\")*")(.*)/
+        my $i=@strs
+        push @strs, $2
+        $t=$1."str:$i".$3
+    $t=~s/$(RE_PAREN)/--/g
+    my @t = split /\s*,\s*/, $t
+    $foreach $t in @t
+        $if $t =~/^str:(\d+)/
+            $t=$strs[$1]
+    return @t
+
+subcode: load_err_patterns
+    #- i_genric, i_LINE, b_specific, b_errnames_txt, i_class
+    my %KnownErrRoutines = ( 
+        'MPIR_Err_create_code'      => '5:3:1:1:4', 
+        'MPIO_Err_create_code'      => '5:3:1:0:-1', 
+        'MPIR_ERR_SET'              => '2:-1:0:1:1',
+        'MPIR_ERR_SETSIMPLE'        => '2:-1:0:1:1',
+        'MPIR_ERR_SET1'             => '2:-1:1:1:1',
+        'MPIR_ERR_SET2'             => '2:-1:2:1:1',
+        'MPIR_ERR_SETANDSTMT'       => '3:-1:0:1:1',
+        'MPIR_ERR_SETANDSTMT1'      => '3:-1:1:1:1', 
+        'MPIR_ERR_SETANDSTMT2'      => '3:-1:1:1:1', 
+        'MPIR_ERR_SETANDSTMT3'      => '3:-1:1:1:1', 
+        'MPIR_ERR_SETANDSTMT4'      => '3:-1:1:1:1', 
+        'MPIR_ERR_SETANDJUMP'       => '2:-1:0:1:1',
+        'MPIR_ERR_SETANDJUMP1'      => '2:-1:1:1:1', 
+        'MPIR_ERR_SETANDJUMP2'      => '2:-1:1:1:1', 
+        'MPIR_ERR_SETANDJUMP3'      => '2:-1:1:1:1', 
+        'MPIR_ERR_SETANDJUMP4'      => '2:-1:1:1:1', 
+        'MPIR_ERR_CHKANDSTMT'       => '4:-1:0:1:2', 
+        'MPIR_ERR_CHKANDSTMT1'      => '4:-1:1:1:2', 
+        'MPIR_ERR_CHKANDSTMT2'      => '4:-1:1:1:2', 
+        'MPIR_ERR_CHKANDSTMT3'      => '4:-1:1:1:2', 
+        'MPIR_ERR_CHKANDSTMT4'      => '4:-1:1:1:2', 
+        'MPIR_ERR_CHKANDJUMP'       => '3:-1:0:1:2',
+        'MPIR_ERR_CHKANDJUMP1'      => '3:-1:1:1:2',
+        'MPIR_ERR_CHKANDJUMP2'      => '3:-1:1:1:2',
+        'MPIR_ERR_CHKANDJUMP3'      => '3:-1:1:1:2',
+        'MPIR_ERR_CHKANDJUMP4'      => '3:-1:1:1:2',
+        'MPIR_ERR_SETFATAL'         => '2:-1:0:1:1',
+        'MPIR_ERR_SETFATALSIMPLE'   => '2:-1:0:1:1',
+        'MPIR_ERR_SETFATAL1'        => '2:-1:1:1:1',
+        'MPIR_ERR_SETFATAL2'        => '2:-1:2:1:1',
+        'MPIR_ERR_SETFATALANDSTMT'  => '3:-1:0:1:1',
+        'MPIR_ERR_SETFATALANDSTMT1' => '3:-1:1:1:1', 
+        'MPIR_ERR_SETFATALANDSTMT2' => '3:-1:1:1:1', 
+        'MPIR_ERR_SETFATALANDSTMT3' => '3:-1:1:1:1', 
+        'MPIR_ERR_SETFATALANDSTMT4' => '3:-1:1:1:1', 
+        'MPIR_ERR_SETFATALANDJUMP'  => '2:-1:0:1:1',
+        'MPIR_ERR_SETFATALANDJUMP1' => '2:-1:1:1:1', 
+        'MPIR_ERR_SETFATALANDJUMP2' => '2:-1:1:1:1', 
+        'MPIR_ERR_SETFATALANDJUMP3' => '2:-1:1:1:1', 
+        'MPIR_ERR_SETFATALANDJUMP4' => '2:-1:1:1:1', 
+        'MPIR_ERR_CHKFATALANDSTMT'  => '4:-1:0:1:2', 
+        'MPIR_ERR_CHKFATALANDSTMT1' => '4:-1:1:1:2', 
+        'MPIR_ERR_CHKFATALANDSTMT2' => '4:-1:1:1:2', 
+        'MPIR_ERR_CHKFATALANDSTMT3' => '4:-1:1:1:2', 
+        'MPIR_ERR_CHKFATALANDSTMT4' => '4:-1:1:1:2', 
+        'MPIR_ERR_CHKFATALANDJUMP'  => '3:-1:0:1:2',
+        'MPIR_ERR_CHKFATALANDJUMP1' => '3:-1:1:1:2',
+        'MPIR_ERR_CHKFATALANDJUMP2' => '3:-1:1:1:2',
+        'MPIR_ERR_CHKFATALANDJUMP3' => '3:-1:1:1:2',
+        'MPIR_ERR_CHKFATALANDJUMP4' => '3:-1:1:1:2',
+        'MPIR_ERRTEST_VALID_HANDLE' => '4:-1:0:1:3',
+    );

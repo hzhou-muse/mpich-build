@@ -1,0 +1,117 @@
+fncode: add_make_vars($key, $val)
+    $global %make_vars
+    $if !$make_vars{$key}
+        $make_vars{$key} = $val
+    $else
+        $make_vars{$key} .= " $val"
+
+# ---- automake ----
+fncode: load_automake($file, $cond_hash)
+    $global %make_vars, %autoconf_vars
+    $global @ltlibs, @programs, %dst_hash
+    my $cwd
+    $if $file=~/^(.*)\/Makefile.am/ -> $dir
+        $cwd = Cwd::getcwd()
+        chdir $dir or die "load_automake: can't chdir $dir\n"
+        $file="Makefile.am"
+
+    $(if:showload)
+        $print "Load automake: $file ..."
+    $call get_file_in_lines, $file
+    $call parse_lines
+
+    $if $cwd
+        chdir $cwd or die "Can't chdir [$cwd]\n"
+
+    subcode: parse_lines
+        $if !$make_vars{top_srcdir}
+            $make_vars{top_srcdir} = "."
+        my $prev
+        $foreach @lines
+            s/\x24\(srcdir\)/./g
+            s/\x24\(top_srcdir\)/$make_vars{top_srcdir}/g
+            s/\x24\(top_builddir\)/$make_vars{top_srcdir}/g
+            s/\@(\w+)\@/$autoconf_vars{$1}/g
+            $if /(.*)\\$/
+                $prev .= "$1 "
+                continue
+            $if $prev
+                $_ = "$prev $_"
+                s/\s+/ /g
+                $prev = ""
+
+            $if /^include\s+(\S+)/
+                load_automake($1, $cond_hash)
+            $elif /^(\w+)_LTLIBRARIES\s*\+?=\s*(.*)/ -> $dir, $t
+                $foreach $a in split /\s+/, $t
+                    push @ltlibs, $a
+                    $if $dir ne "noinst"
+                        $dst_hash{$a} = "\x24(PREFIX)/$dir"
+            $elif /^(\w+)_PROGRAMS\s*\+?=\s*(.*)/ -> $dir, $t
+                # like automake, don't build EXTRA_PROGRAMS by default
+                $if $dir eq "EXTRA"
+                    $t = ""
+                $foreach $a in split /\s+/, $t
+                    push @programs, $a
+                    $if $dir ne "noinst"
+                        $dst_hash{$a} = "\x24(PREFIX)/$dir"
+            $elif /^(\w+)\s*\+?=\s*(.*)/
+                $if $make_vars{$1}
+                    $make_vars{$1}.=" "
+                $make_vars{$1}.=$2
+
+    subcode: get_file_in_lines(file)
+        my @lines
+        my ($skip, @stack)
+        &call open_r, $(file)
+            $if /^if\s+(\w+)/
+                push @stack, $skip
+                $(if:showcond)
+                    $print if $1 ...
+                # set new skip if parent is not skipping
+                $if !$skip
+                    $skip = !$cond_hash->{$1}
+                next
+            $elif /^else\b/
+                # only flip if the parent is not skipping
+                $if !$stack[-1]
+                    $skip = !$skip
+                next
+            $if /^endif\b/
+                $skip = pop @stack
+                next
+
+            $if !$skip
+                push @lines, $_
+
+fncode: get_make_var($name)
+    my $t = $make_vars{$name}
+    $if $t eq "-"
+        return "\x24($name)"
+    $elif defined $t
+        $t=~s/\$\((\w+)\)/get_make_var($1)/ge
+        $t=~s/\s+/ /g
+        # $make_vars{$key} = $t
+        return $t
+    $else
+        my %dflt=(CC=>"gcc", CXX=>"g++", FC=>"gfortran")
+        return $dflt{$name}
+
+fncode: get_make_objects($p, $is_program)
+    my $a = $p
+    $a=~s/[\.\/]/_/g
+
+    my $t = get_make_var("${a}_SOURCES")
+    $t .= get_make_var("dist_${a}_SOURCES")
+    $t .= get_make_var("nodist_${a}_SOURCES")
+    $if !$t and $is_program
+        $t = "$p.c"
+    my @tlist
+    $foreach $a in  split /\s+/, $t
+        $if $a=~/(.*)\.(c|f|f90|cu|cxx)$/
+            $if $is_program
+                push @tlist, "$1.o"
+            $else
+                push @tlist, "$1.lo"
+    @tlist = sort @tlist
+    return \@tlist

@@ -1,0 +1,173 @@
+#- findout mymake directory
+subcode: set_mymake
+    $if $0=~/^(\/.*)\//
+        $opts{mymake} = $1
+    $elif $0=~/^(.*)\//
+        $opts{mymake} .= "$pwd/$1"
+    $opts{mymake} .="/mymake"
+
+#- cmdline, sort out options 
+subcode: parse_args
+    $if !-f "maint/version.m4"
+        die "Not in top_srcdir.\n"
+    $global %opts
+    $global @config_args
+    $(if:_pagename=mymake)
+        $call init_config_defines
+    $call @set_opts_default
+    $call @load_last_ARGV
+    $call parse_ARGV
+    $call post_check
+    # $map opt_set, moddir, prefix
+    $call set_prefix
+    $call set_moddir
+
+    my $uname = `uname`
+    $opts{uname} = $uname
+    $if $uname=~/CYGWIN/
+        $opts{do_pmpi} = 1
+    $elif $opts{"disable-weak-symbols"}
+        $opts{do_pmpi} = 1
+
+    subcode: set_moddir
+        my $mod_tarball
+        $if $ENV{MODTARBALL}
+            $mod_tarball = $ENV{MODTARBALL}
+        $(for:a in modules,modules-yaksa-new,modules-gpu)
+            $elif -e "$(a).tar.gz"
+                $mod_tarball = "$(a).tar.gz"
+        # --
+        # my $cmd = "git log --after=\"2021-2-16\" |grep 'Yaksa has been updated to use intptr_t'"
+        $if $mod_tarball =~/modules\.tar\.gz$/
+            my $base_tarball = $mod_tarball
+            $if $opts{"with-cuda"} && $mod_tarball
+                $mod_tarball=~s/modules[^\/]*\.tar\.gz$/modules-gpu.tar.gz/
+            $elif $opts{"with-hip"} && $mod_tarball
+                $mod_tarball=~s/modules[^\/]*\.tar\.gz$/modules-hip.tar.gz/
+            $if !-e $mod_tarball
+                $print "$mod_tarball not found! Using $base_tarball."
+                $mod_tarball = $base_tarball
+        # --------------
+        $if $ENV{MODDIR}
+            $opts{moddir} = Cwd::abs_path($ENV{MODDIR})
+        $elif -e "mymake/skip_tarball"
+            $opts{moddir} = "$pwd/mymake"
+        $elif -e $mod_tarball
+            $opts{moddir} = "$pwd/mymake"
+            $call do_cmd, mkdir -p $opts{moddir}
+            $call do_cmd, tar -C $opts{moddir} -xf $mod_tarball
+            system "touch mymake/skip_tarball"
+        $else
+            die "moddir not set: set MODTARBALL to the modules tarball (or MODDIR to an unpacked one)\n"
+
+    subcode: set_prefix
+        $if !$opts{prefix}
+            $opts{prefix}="$pwd/_inst"
+        system "mkdir -p $opts{prefix}"
+
+    subcode: opt_set(name)
+        $global $$(name)
+        $if $opts{$(name)}
+            $$(name) = $opts{$(name)}
+
+    subcode: set_opts_default
+        $opts{V}=0
+
+    subcode: post_check
+        $if !$opts{device}
+            $opts{device} = "ch4:ofi"
+        $elif $opts{device} eq "ch4"
+            $opts{device} = "ch4:ofi"
+
+        $(if:_pagename=mymake)
+            $call post_config_defines
+        $(for:CC,CXX,FC and gcc,g++,gfortran)
+            $if $opts{$1}
+                $ENV{$1}=$opts{$1}
+            $elif $ENV{$1}
+                $opts{$1} = $ENV{$1}
+            $else
+                $opts{$1} = "$2"
+
+    subcode: parse_ARGV
+        $foreach $a in @ARGV
+            $if $a=~/^-(quick|f08|noclean|sh)/
+                $opts{$1}=1
+            $elif $a=~/^--(.*?)=(.*)/ -> $o, $v
+                $opts{$1}=$2
+                $if $v eq "no"
+                    $if $o=~/^with-(.*)/
+                        $opts{"without-$1"} = 1
+                    $elif $o=~/^enable-(.*)/
+                        $opts{"disable-$1"} = 1
+            $elif $a=~/^-(.*?)=(.*)/
+                $opts{$1}=$2
+            $elif $a=~/^--(.*)/
+                $opts{$1}=1
+            $elif $a=~/^(\w+)=(.*)/
+                $opts{$1}=$2
+            # -----------------------
+            $if $a=~/^--(prefix)=(.*)/
+                $opts{$1}=$2
+            $elif $a=~/^--/
+                $if $a=~/^--with-device=(.*)/
+                    $opts{device}=$1
+                    push @config_args, $a
+                $elif $a=~/^--with-pm=(.*)/
+                    $opts{pm}=$1
+                    # push @config_args, $a
+                $elif $a=~/--disable-(romio|cxx|fortran)/
+                    $opts{"disable_$1"}=1
+                    $opts{"enable_$1"}=0
+                    push @config_args, $a
+                $elif $a=~/--enable-fortran=(\w+)/
+                    $opts{disable_fortran}=0
+                    $opts{enable_fortran}=$1
+                    push @config_args, $a
+                $elif $a=~/--with-atomic-primitives=(.*)/
+                    $opts{openpa_primitives} = $1
+                $elif $a=~/--enable-strict/
+                    $opts{enable_strict} = 1
+                    push @config_args, $a
+                $elif $a=~/--enable-izem-queue/
+                    $opts{enable_izem}=1
+                    push @config_args, $a
+                $elif $a=~/--with-(argobots)=(.*)/
+                    $opts{$1}=$2
+                    push @config_args, $a
+                $(if:_pagename=mymake)
+                    $call filter_config_defines
+                $else nowarn
+                    push @config_args, $a
+
+#----------------------
+subcode: load_last_ARGV
+    my $need_save_args
+    $if !@ARGV && -f "mymake/args"
+        $call get_file_in_t, mymake/args
+        chomp $t
+        @ARGV = split /\s+/, $t
+        $print loading last ARGV: @ARGV
+    $elif @ARGV
+        # has to wait until mymake folder is made
+        $need_save_args = 1
+
+subcode: save_last_ARGV
+    $if $need_save_args
+        my $t = join(' ', @ARGV)
+        &call open_w, mymake/args
+            print Out $t, "\n"
+        $call save_opts
+
+        $if -f "Makefile" and !$opts{noclean}
+            system "make realclean"
+
+#---------------------------------------- 
+subcode: do_cmd(@cmd)
+    $(if:cmd~")
+        my $cmd = $(cmd)
+    $(else)
+        my $cmd = "$(cmd)"
+    $print $cmd
+    system $cmd
+

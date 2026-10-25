@@ -1,0 +1,16 @@
+include: macros_common/mymake.def
+include: macros_common/mymake/libtool.def
+include: macros_mymake/libtool.def
+
+output_dir: ./mymake
+
+page: mymake_libtool
+    module: perl
+
+    $call load_opts
+
+    $call mymake_libtool, CXX, F77, FC
+
+    chdir $pwd
+    $call patch_libtool, mymake/libtool/libtool
+

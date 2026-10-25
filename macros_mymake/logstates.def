@@ -1,0 +1,53 @@
+subcode: logging_states
+    my (@timer_states, %state_funcnames, %state_colors)
+    &call each_ch_file
+        $call get_logging_states, $f
+
+    my @timer_states = sort @timer_states
+    my $n = @timer_states
+    &call open_W, src/include/mpiallstates.h
+        &call hdr_guard, mpiallstates
+            $print "/* $n total states */"
+            $print "enum MPID_TIMER_STATE {"
+            $foreach $t in @timer_states
+                $print "     $t,"
+            $print "     MPID_NUM_TIMER_STATES"
+            $print "};"
+
+    &call open_W, src/util/logging/common/state_names.h
+        &call hdr_guard, state_names
+            $print "#include \"mpiallstates.h\""
+            $print
+            $print "typedef struct {"
+            $print "    int state;"
+            $print "    const char *funcname;"
+            $print "    const char *color;"
+            $print "} MPIU_State_defs;"
+            $print
+            $print "static MPIU_State_defs mpich_states[] = {"
+            $foreach $t in @timer_states
+                $print "    { $t, \"$state_funcnames{$t}\", NULL },"
+            $print "    { -1, NULL, NULL }
+            $print "};"
+
+
+subcode: get_logging_states(f)
+    my $funcname
+    &call open_r, $(f)
+        $if /^\w[^(]* \*?(\w+)\s*\(/
+            $funcname=$1
+        $elif /^(\w+)\s*\(/
+            $funcname=$1
+        $elif !$funcname and /^\s+\w[^(]* \*?(\w+)\s*\(/
+            $funcname=$1
+        $elif /^}/
+            undef $funcname
+        $elif /^\s*MPIR_FUNC_\w+_STATE_DECL\(\s*(\S+)\s*\)/ -> $state
+            $if $state eq "FUNCNAME"
+                next
+            $if !$funcname
+                $print $f:$state
+                $state_funcnames{$state}="__func__"
+            $else
+                $state_funcnames{$state}=$funcname
+            push @timer_states, $state

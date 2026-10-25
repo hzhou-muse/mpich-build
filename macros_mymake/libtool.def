@@ -1,0 +1,40 @@
+subcode: patch_libtool(from)
+    $(set:skip_mod_list=1)
+    my %need_patch
+    $call get_file_lines, $(from)
+    &call open_W, libtool
+        $foreach $l in @lines
+            $if $l=~/^AR_FLAGS=/
+                $l = "AR_FLAGS=\"cr\"\n"
+            # --------------------------
+            $elif $l=~/^CC="(.*)"/ -> $CC
+                $call set_need_patch
+            $elif $l=~/^(pic_flag|wl|link_static_flag)=/
+                $if $need_patch{$1}
+                    $l = "$1='$need_patch{$1}'\n"
+            $elif $l=~/^(archive_cmds=|\s*\\\$CC\s+-shared )/
+                $if $need_patch{shared}
+                    $l=~s/-shared /$need_patch{shared} /
+            # --------------------------
+            $if $need_patch{gxx}
+                # the recorded crt objects and search paths belong to the
+                # g++ that configured libtool, let g++ -shared supply its own
+                $if $l=~/^(predep_objects|postdep_objects|predeps|postdeps|compiler_lib_search_dirs|compiler_lib_search_path)=/
+                    $l = "$1=\"\"\n"
+                $elif $l=~/^archive(_expsym)?_cmds=/
+                    $l=~s/ -nostdlib / /
+            # --------------------------
+            print Out $l
+    system "chmod a+x libtool"
+
+    subcode: set_need_patch
+        $if $CC =~ /^sun(f77|f9.|fortran)/
+            $need_patch{pic_flag}=" -KPIC"
+            $need_patch{wl}="-Qoption ld "
+            $need_patch{link_static_flag}=" -Bstatic"
+            $need_patch{shared}="-G"
+        $elif $CC =~ /^g\+\+/
+            %need_patch=(gxx=>1)
+        $else
+            %need_patch=()
+

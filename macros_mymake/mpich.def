@@ -1,0 +1,314 @@
+include: macros_mymake/dependency.def
+include: macros_mymake/gforker.def
+include: macros_mymake/mpicc_etc.def
+
+subcode: mpich_slow
+    $call @preproc_bindings
+    $(setmacro:makefile=mpich)
+
+    $if $opts{"with-pmi"} or $opts{"with-pmi1"} or $opts{"with-pmi2"}
+        $opts{"3rd-party-pmi"} = 1
+    $call set_general_make_rules
+    $call mpich_make_setup
+    $call load_maint_version
+
+    my $ret=0
+    $call mpich_configure
+
+    $if $ret == 0
+        $call @post_mpich_configure
+
+    $if $ret == 0
+        $call custom_make, mpich
+
+    $if $ret == 0
+        $call load_dump_CFLAGS
+        $call patch_mpicc_etc
+
+        $ENV{CFLAGS}=$opts{CFLAGS}
+        $(for:mpl, pmi)
+            $if $opts{"embed_$1"}
+                my $t="$(H$1)"
+                $t=~s/$pwd\///g
+                $ret = system "make $t"
+
+    $if $ret == 0
+        # post filtering config_defines
+        $call @patch_sizeof_atomic
+        $call patch_atomic_nolocal
+        $if %config_defines
+            $call define_config_h, src/mpl/include/mplconfig.h
+            $call define_config_h, src/include/mpichconf.h
+
+    # ---------------------------
+    subcode: custom_programs
+        $if $t=~/mpichversion/
+            # mpichversion include mpiimpl.h
+            # pgcc won't ignore static inline functions
+            # causing undefined reference to `fi_strerror` etc.
+            next
+        $elif $t=~/mpivars/
+            # not working for clang asan yet
+            next
+    # ---------------------------
+    subcode: post_mpich_configure
+        &call open_r, src/include/mpichconf.h
+            $if /^#define\s+HAVE_.*WEAK.* 1/
+                $opts{have_weak}=1
+        $if !$opts{so_version} or $opts{so_version} eq "0:0:0"
+            &call open_r, maint/version.m4
+                $if /libmpi_so_version_m4.*\[([\d:]*)\]/
+                    $opts{so_version}=$1
+        &call open_r, config.status
+            $if /S\["WRAPPER_LIBS"\]="(.*)"/
+                $opts{WRAPPER_LIBS}=$1
+
+    subcode: load_dump_CFLAGS
+        &call open_r, mymake/Makefile.custom
+            $if /^CFLAGS *= *(.*)/
+                $opts{CFLAGS}=$1
+                &call open_W, mymake/CFLAGS
+                    $print $1
+
+    subcode: set_general_make_rules
+        $call set_mymake_DO
+        $if !$opts{"3rd-party-pmi"}
+            $call add_rule_hydra, hydra
+        $if -e "src/binding/fortran/Makefile.am"
+            system "cp maint/version.m4 src/binding/fortran/"
+            system "touch src/binding/fortran/localdefs"
+            $call add_rule_mpifort, mpifort
+        # $call add_rule_testing
+
+        subcode: add_rule_mpifort(name)
+            $(set:dir=src/binding/fortran)
+            my $mkfile="$(dir)/Makefile"
+            push @extra_make_rules, ".PHONY: $(name) $(name)-install"
+            push @extra_make_rules, "$(name): $mkfile"
+            push @extra_make_rules, "\t(cd $(dir) && \x24(MAKE) )"
+            push @extra_make_rules, ""
+            push @extra_make_rules, "$(name)-install: $mkfile"
+            push @extra_make_rules, "\t(cd $(dir) && \x24(MAKE) install )"
+            push @extra_make_rules, ""
+            push @extra_make_rules, "$(name)-clean:"
+            push @extra_make_rules, "\t(cd $(dir) && make clean && rm -f Makefile )"
+            push @extra_make_rules, ""
+            push @extra_make_rules, "$mkfile:"
+            my $autogen_env = "MPICH_CONFDB=../../../confdb"
+            my $config_args = "--prefix=$opts{prefix} --with-mpi=$opts{prefix}"
+            push @extra_make_rules, "\t(cd $(dir) &&  $autogen_env ./autogen.sh && ./configure $config_args )"
+            push @extra_make_rules, ""
+
+
+    subcode: set_mymake_DO
+        $(for:stage,clean,errmsg,cvars,logs,hydra,testing,mpi_h)
+            push @extra_make_rules, "DO_$1 = perl $opts{mymake}_$1.pl"
+        push @extra_make_rules, ""
+        push @extra_make_rules, ".PHONY: test cvars errmsg"
+        $(for:testing,cvars,errmsg)
+            $call push_autogen_rule, $1, $1
+        push @extra_make_rules, "realclean: clean"
+        push @extra_make_rules, "\t\x24(DO_clean)"
+
+
+#---------------------------------------- 
+subcode: set_make_rules_DO
+    $(for:stage,clean,errmsg,cvars,logs,config,makefile)
+        push @extra_make_rules, "DO_$1 = perl $opts{mymake}_$1.pl"
+    push @extra_make_rules, ""
+    push @extra_make_rules, ".PHONY: test cvars errmsg realclean"
+    $(for:testing,cvars,errmsg)
+        $call push_autogen_rule, $1, $1
+    push @extra_make_rules, "realclean: clean"
+    push @extra_make_rules, "\t\x24(DO_clean)"
+
+#---------------------------------------- 
+subcode: mpich_make_setup
+    $(for:mpl,hwloc,yaksa,jsonc)
+        $call need_$1
+    $if $opts{enable_izem}
+        $call need_izem
+
+    $if -f "src/pmi/configure.ac" && !$opts{"3rd-party-pmi"}
+        $call need_pmi
+
+    $if !$opts{disable_romio}
+        $call need_romio
+    $if $opts{device}=~/:ucx/
+        $call need_ucx
+    $elif $opts{device}=~/ch4:ofi/
+        $call need_ofi
+    $elif $opts{device}=~/ch3.*:ofi/
+        $call need_ofi
+
+    $call add_rule_gforker
+    $call add_rule_remshell
+    $call add_rule_cpi
+    $call @add_rule_dep
+
+    $call need_mpich_preproc # cvar, errmsg, etc.
+
+    $if $ENV{EXTRA_LIB}
+        $L_list .= " $ENV{EXTRA_LIB}"
+
+    $if $opts{do_pmpi}
+        $special_targets{lib_libmpi_la}="\x24(LTCC) -DMPICH_MPI_FROM_PMPI"
+    $if $opts{"enable-mpi-abi"}
+        my $CC = "\x24(LTCC) -DMPICH_BUILD_MPI_ABI -DBUILD_MPI_ABI -Isrc/binding/abi"
+        $if !$opts{do_pmpi}
+            $special_targets{lib_libmpi_abi_la}=$CC
+        $else
+            $special_targets{lib_libpmpi_abi_la}=$CC
+            $special_targets{lib_libmpi_abi_la}="$CC -DMPICH_MPI_FROM_PMPI"
+
+    # install mpicc etc.
+    my $bin="\x24(PREFIX)/bin"
+    $dst_hash{"mymake/mpicc"}=$bin
+    $dst_hash{"mymake/mpicxx"}=$bin
+    $dst_hash{"mymake/mpifort"}=$bin
+    $if $opts{"enable-mpi-abi"}
+        $dst_hash{"LN_S-$bin/mpicc_abi"}="$bin/mpicc"
+
+    subcode: need_mpich_preproc
+        $(set:errhan=src/mpi/errhan/$1)
+        push @extra_make_rules, "$(errhan:errutil.lo): $(errhan:defmsg.h)"
+        push @CONFIGS, "src/include/mpichconf.h"
+        push @CONFIGS, "src/include/mpir_cvars.h"
+        push @CONFIGS, "src/mpi/errhan/defmsg.h"
+        $call push_autogen_rule, errmsg, src/mpi/errhan/defmsg.h
+        $call push_autogen_rule, cvars, src/include/mpir_cvars.h
+        # $call push_autogen_rule, logs, src/include/mpiallstates.h
+        $if -f "src/include/autogen.h.in"
+            push @CONFIGS, "src/include/autogen.h"
+            push @extra_make_rules, "src/include/autogen.h: src/include/autogen.h.in"
+            push @extra_make_rules, "\tperl maint/gen_init.pl"
+            push @extra_make_rules, ""
+
+
+        &call add_subdir_rule_block, src/glue/romio, src/glue/romio/all_romio_symbols.c
+            push @t, "perl all_romio_symbols ../../mpi/romio/include/mpio.h.in"
+
+    subcode: add_rule_cpi
+        push @extra_make_rules, "cpi: "
+        push @extra_make_rules, "\tmpicc -o cpi examples/cpi.c"
+        push @extra_make_rules, ""
+        
+    subcode: add_rule_dep
+        $if $opts{device} =~/ch4/
+            $call add_ch4_dep
+
+#---------------------------------------- 
+subcode: mpich_configure
+    $call @hack_MPI_OFFSET
+    $ENV{COMPILER_TLS} = 1
+    $if !-f "subsys_include.m4"
+        $call stage, maint/gen_subcfg_m4
+        system "perl maint/gen_subcfg_m4"
+    $if !-f "configure"
+        system "rm -f mymake/Makefile.orig"
+        $call stage, Autoconf MPICH
+        &call modify_frame, temporary
+            $call modify_configure_ac
+            system "libtoolize && autoreconf -ivf"
+    $if !-f "mymake/Makefile.orig"
+        $call stage, Configure MPICH
+        $call get_mpl_flags
+        system "rm -f Makefile"
+        my $t = join ' ', @config_args
+        $if !$ret
+            $ret = system "./configure --with-pm=no $t" # we'll configure/build hydra separately
+        $if !$ret
+            $ret = system "mv Makefile mymake/Makefile.orig"
+        $if !$ret
+            $ret = system "mv libtool mymake/libtool.orig"
+        $if !$ret
+            $call patch_libtool, mymake/libtool.orig
+
+    # -------------------
+    subcode: hack_MPI_OFFSET
+        my $t = `uname -m`
+        $if $t=~/x86_64/
+            $ENV{FORTRAN_MPI_OFFSET}="integer*8"
+    subcode: get_mpl_flags
+        $ENV{COMPILER_TLS}="_Thread_local"
+        $foreach $t in @config_args
+            $if $t=~/--with-(cuda|hip|ze)/
+                $ENV{GPU_SUPPORT}=uc($1)
+    # -------------------
+    subcode: modify_configure_ac
+        $call patch_confdb_subcfg
+        &call modify, configure.ac
+            $if $l=~/AC_CONFIG_SUBDIRS/
+                next
+            $elif $l=~/^(\s*)AM_CONDITIONAL.*BUILD_ROMIO/
+                $l = $1. "AM_CONDITIONAL([BUILD_ROMIO], false)"
+            $elif $l=~/^\s*(PAC_CONFIG_MPL|HWLOC_)/
+                next
+            $elif $l=~/^(\s*)PAC_CONFIG_HWLOC/
+                $l = "$1"."pac_have_hwloc=yes\n"
+        &call modify, Makefile.am
+            $if $l=~/ACLOCAL_AMFLAGS/
+                $l ="ACLOCAL_AMFLAGS = -I confdb\n"
+        $if $opts{device}=~/ch3/
+            $call patch_configure_ch3
+        $else
+            $if -f "src/mpid/ch4/shm/ipc/xpmem/subconfigure.m4"
+                $call hack_configure_xpmem
+
+    subcode: patch_confdb_subcfg
+        my $flag
+        &call modify, confdb/aclocal_subcfg.m4
+            $if $l=~/^AC_DEFUN\(\[PAC_CONFIG_SUBDIR_ARGS/
+                $flag=1
+            $elif $flag and $l=~/^\]\)/
+                $l = ":])" # NOOP
+                $flag=0
+            $elif $flag
+                next
+
+    subcode: patch_configure_ch3
+        my $flag
+        &call modify, src/mpid/ch3/subconfigure.m4
+            $if $l=~/AC_MSG_CHECKING.*OpenPA/
+                $flag=1
+            $elif $flag and $l=~/AC_C_BIGENDIAN/
+                $flag=0
+            $elif $flag
+                next
+
+    subcode: hack_configure_xpmem
+        my $skip_xpmem=1
+        $foreach $a in @config_args
+            $if $a=~/--with-xpmem/
+                $skip_xpmem = 0
+        $if $skip_xpmem
+            &call modify, src/mpid/ch4/shm/ipc/xpmem/subconfigure.m4
+                $if $l=~/AM_CONDITIONAL.*BUILD_SHM_IPC_XPMEM.*build_ch4_shm_ipc_xpmem/
+                    $l=~s/test .* ".*"/false/
+
+#---------------------------------------- 
+subcode: patch_sizeof_atomic
+    $if -f "src/mpl/include/mpl_atomic.h"
+        &call open_w, "mymake/t.c"
+            $(set:print_to=Out)
+            $print #include "mpl_atomic.h"
+            $print #include <pthread.h>
+            $print "pthread_mutex_t MPL_emulation_lock;"
+            $print "int main() { return sizeof(MPL_atomic_ptr_t); }"
+
+        my $CC = get_make_var("CC")
+        system "$CC -Isrc/mpl/include mymake/t.c -o mymake/t"
+        system "mymake/t"
+        my $ret = $? >> 8;
+
+        $config_defines{SIZEOF_MPL_ATOMIC_PTR_T} = $ret
+    $config_defines{SIZEOF_OPA_PTR_T} = 8  # hack
+
+subcode: patch_atomic_nolocal
+    my $lock_based_atomics
+    &call open_r, "src/mpl/include/mplconfig.h"
+        $if /^#define MPL_USE_LOCK_BASED_PRIMITIVES/  
+            $lock_based_atomics = 1
+            last
+    $if $lock_based_atomics
+        $config_defines{ENABLE_NO_LOCAL} = 1

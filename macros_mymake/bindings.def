@@ -1,0 +1,109 @@
+subcode: preproc_bindings
+    my $bin="\x24(PREFIX)/bin"
+    $if !$opts{disable_cxx}
+        $opts{enable_cxx}=1
+        $call config_cxx
+    $else
+        system "touch src/binding/cxx/mpicxx.h.in"
+    # always install mpicxx
+    $dst_hash{"mymake/mpicxx"}=$bin
+    $dst_hash{"LN_S-$bin/mpic++"}="$bin/mpicxx"
+
+    # always install mpifort
+    $dst_hash{"mymake/mpifort"}=$bin
+    $dst_hash{"LN_S-$bin/mpif90"}="$bin/mpifort"
+    $dst_hash{"LN_S-$bin/mpif77"}="$bin/mpifort"
+
+    $if !$opts{disable_fortran}
+        $call config_fortran_binding
+    $else
+        system "touch src/binding/fortran/mpif_h/Makefile_wrappers.mk"
+        $(for:mpif_h,use_mpi, use_mpi_f08)
+            system "touch src/binding/fortran/$1/Makefile.mk"
+        $(for:mpif.h, setbotf.h, setbot.c)
+            system "touch src/binding/fortran/mpif_h/$1.in"
+        $(for:mpi_sizeofs.f90, mpi_base.f90, mpi_constants.f90)
+            system "touch src/binding/fortran/use_mpi/$1.in"
+        $(for:mpi_f08_compile_constants.f90, mpi_c_interface_types.f90)
+            system "touch src/binding/fortran/use_mpi_f08/$1.in"
+
+subcode: autogen_cxx
+    $print : buildiface - cxx
+    chdir "src/binding/cxx"
+    system "perl buildiface -nosep -initfile=./cxx.vlist"
+    chdir $pwd
+subcode: config_cxx
+    $dst_hash{"src/binding/cxx/mpicxx.h"}="$opts{prefix}/include"
+
+subcode: autogen_fortran
+    $(set:D=src/binding/fortran)
+    $if !-f "configure"
+        $if -f "maint/gen_binding_f77.py"
+            system "$python maint/gen_binding_f77.py"
+        $if -f "maint/gen_binding_f90.py"
+            system "$python maint/gen_binding_f90.py"
+        $if -f "maint/gen_binding_f08.py"
+            system "$python maint/gen_binding_f08.py"
+
+subcode: config_fortran_binding
+    $(set:D=src/binding/fortran)
+    $call add_extra_use_mpi
+    $call add_extra_use_mpi_f08
+    $dst_hash{"$(D)/mpif_h/mpif.h"}="$opts{prefix}/include"
+
+subcode: add_extra_use_mpi
+    $(set:D=src/binding/fortran)
+    $(set:U=src/binding/fortran/use_mpi)
+    push @extra_make_rules, "$(U)/mpi.lo: $(U)/mpi_constants.lo $(U)/mpi_sizeofs.lo $(U)/mpi_base.lo $(U)/pmpi_base.lo"
+    push @extra_make_rules, "$(U)/mpi_base.lo: $(U)/mpi_constants.lo", ""
+    push @extra_make_rules, "$(U)/pmpi_base.lo: $(U)/mpi_constants.lo", ""
+    push @extra_make_rules, "$(U)/mpi_sizeofs.lo: $(U)/mpifnoext.h", ""
+    push @extra_make_rules, "$(U)/mpi_constants.lo: $(U)/mpifnoext.h", ""
+    push @extra_make_rules, "$(U)/mpifnoext.h: $(D)/mpif_h/mpif.h"
+    # remove EXTERNAL functions and MPI_WTIME/MPI_WTICK declarations
+    push @extra_make_rules, "\tsed -e 's/^C/!/g' -e '/EXTERNAL/d' -e '/PMPI_/d' \$< > \$@"
+    push @extra_make_rules, ""
+
+subcode: add_extra_use_mpi_f08
+    $(set:D=src/binding/fortran)
+    $(set:U=$(D)/use_mpi_f08)
+    push @extra_make_rules, "$(U)/mpi_c_interface.lo: $(U)/mpi_c_interface_nobuf.lo $(U)/mpi_c_interface_cdesc.lo", ""
+    push @extra_make_rules, "$(U)/mpi_c_interface_nobuf.lo: $(U)/mpi_c_interface_glue.lo", ""
+    push @extra_make_rules, "$(U)/mpi_c_interface_glue.lo: $(U)/mpi_f08.lo", ""
+
+    push @extra_make_rules, "$(U)/mpi_f08.lo: $(U)/pmpi_f08.lo", ""
+    push @extra_make_rules, "$(U)/pmpi_f08.lo: $(U)/mpi_f08_callbacks.lo $(U)/mpi_f08_link_constants.lo", ""
+    push @extra_make_rules, "$(U)/mpi_f08_callbacks.lo: $(U)/mpi_f08_compile_constants.lo", ""
+    push @extra_make_rules, "$(U)/mpi_f08_compile_constants.lo: $(U)/mpi_f08_types.lo", ""
+    push @extra_make_rules, "$(U)/mpi_f08_link_constants.lo: $(U)/mpi_f08_types.lo", ""
+    push @extra_make_rules, "$(U)/mpi_f08_types.lo: $(U)/mpi_c_interface_types.lo", ""
+    push @extra_make_rules, "$(U)/mpi_c_interface_cdesc.lo: $(U)/mpi_c_interface_types.lo $(U)/mpi_f08_link_constants.lo", ""
+    $call add_wrappers_f
+
+    subcode: add_wrappers_f
+        $(for:f_sync_reg_f08ts,f08ts)
+            push @extra_make_rules, "$(U)/wrappers_f/$1.lo: $(U)/mpi_f08.lo $(U)/mpi_c_interface.lo"
+            push @extra_make_rules, "$(U)/wrappers_f/p$1.lo: $(U)/mpi_f08.lo $(U)/mpi_c_interface.lo"
+
+
+# ref: custom_make.def
+subcode: dump_fort_object
+    my @f08_wrappers_f
+    $foreach $t in $(tlist)
+        $if $t=~/use_mpi_f08\/wrappers_f\//
+            push @f08_wrappers_f, $t
+            $t=undef
+
+    $(set:key=F08_WRAPPERS_F_OBJECTS)
+    $(set:D=src/binding/fortran/use_mpi_f08)
+    $if @f08_wrappers_f
+        push $(tlist), "\x24($(key))"
+        
+        $print "$(key) = \\"
+        my $last_item = pop @f08_wrappers_f
+        $foreach $t in @f08_wrappers_f
+            $print "    $t \\"
+        $print "    $last_item"
+    $print "\x24($(key)): \x24(CONFIGS) $(D)/mpi_f08.lo $(D)/mpi_c_interface.lo $(D)/mpi_c_interface_types.lo $(D)/mpi_f08_compile_constants.lo"
+    $print
+

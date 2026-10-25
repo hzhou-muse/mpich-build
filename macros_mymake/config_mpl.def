@@ -1,0 +1,161 @@
+subcode: config_init_mpl
+    $config_prefix = "mpl"
+    $config_in = "$mymake_dir/config_templates/mplconfig.h"
+    $config_out = "src/mpl/include/mplconfig.h"
+    symlink "../../libtool", "src/mpl/libtool"
+    symlink "../../confdb", "src/mpl/confdb"
+
+subcode: config_mpl
+    $call ac_init, MPL, 0.1, -, mpl, -
+    $call set_config_defines
+    $call patch_mpl_timer_h
+
+    subcode: set_config_defines
+        $call AC_USE_SYSTEM_EXTENSIONS
+        $config_defines{CACHELINE_SIZE} = 64
+
+        $config_defines{THREAD_PACKAGE_NAME} = "MPL_THREAD_PACKAGE_POSIX"
+        $config_defines{PROC_MUTEX_PACKAGE_NAME} = "MPL_PROC_MUTEX_PACKAGE_POSIX"
+        $if !$config_defines{POSIX_MUTEX_NAME}
+            $config_defines{POSIX_MUTEX_NAME} = "MPL_POSIX_MUTEX_NATIVE"
+
+        $if $opts{"with-shared-memory"} eq "sysv"
+            $config_defines{USE_SYSV_SHM} = 1
+        $else
+            $config_defines{USE_MMAP_SHM} = 1
+        $config_defines{USE_NOTHING_FOR_YIELD} = 1
+
+        $config_defines{HAVE_BACKTRACE} = 1
+
+        # --enable-timer-type=[gethrtime,clock_gettime,gettimeofday,mach_absolute_time,linux86_cycle,gcc_ia64_cycle,ppc64_cycle]
+        $config_defines{HAVE_CLOCK_GETTIME} = 1
+        $config_defines{HAVE_CLOCK_GETRES} = 1
+        $config_defines{HAVE_GETTIMEOFDAY} = 1
+
+        # --with-mpl-atomic-primitives=[auto,c11,gcc_atomic,gcc_sync,win,lock,no]
+        $if test_cc_header($opts{CC}, "stdatomic.h")
+            $config_defines{HAVE_C11_ATOMICS}=1
+        $config_defines{HAVE_GCC_INTRINSIC_ATOMIC}=1
+        $config_defines{HAVE_GCC_INTRINSIC_SYNC}=1
+
+        $config_defines{HAVE_X86INTRIN_H}=1
+
+        # /usr/include/libdrm/i915_drm.h
+        $if -f "/usr/include/libdrm/i915_drm.h"
+            $config_defines{HAVE_LIBDRM_I915_DRM_H} = 1
+
+        $if $opts{cc_version}=~/gcc 4/
+            $config_defines{COMPILER_TLS}="__thread"
+        $else # C11
+            $config_defines{COMPILER_TLS}="_Thread_local"
+        $config_defines{DEFINE_ALIGNED_ALLOC}=1
+        # HAVE_FUNC_ATTRIBUTE_FALLTHROUGH
+        $(for:a in VAR_ATTRIBUTE_USED,VAR_ATTRIBUTE_ALIGNED,_BOOL,__TYPEOF)
+            $config_defines{HAVE_$(a)}=1
+
+        # No backtrace
+        $(for:a in aligned_alloc,BROKEN_VALGRIND,FDOPEN,getifaddrs,getpid,inet_ntop,sleep,usleep)
+            $config_defines{HAVE_$(a:uc)}=1
+
+        $(for:a in cuda,hip,ze)
+            $case $opts{"with-$(a)"}
+                $config_defines{HAVE_GPU} = 1
+                $config_defines{HAVE_$(a:uc)} = 1
+
+        $config_defines{HAVE_POSIX_SHM}=1
+        $config_defines{HAVE_INITSHM}=1
+        $config_defines{HAVE_PTHREAD_MUTEXATTR_SETPSHARED} = 1
+
+        $config_defines{backtrace_size_t} = "int"
+
+    subcode: patch_mpl_timer_h
+        my %confs
+        $confs{MPL_TIMER_TYPE} = "struct timespec"
+        $confs{MPL_TIMER_KIND} = "MPL_TIMER_KIND__CLOCK_GETTIME"
+        autoconf_file("src/mpl/include/mpl_timer.h", \%confs)
+
+#---------------------------------------- 
+subcode: make_mpl
+    $call copy_subdir_module, mpl
+    $autoconf_vars{MPLLIBNAME} = "mpl"
+
+    my %conds
+    $conds{MPL_EMBEDDED_MODE} = 1
+    $(for:a in cuda,hip,ze)
+        $case $opts{"with-$(a)"}
+            my $p = $opts{"with-$(a)"}
+            $conds{MPL_HAVE_$(a:uc)} = 1
+            $make_vars{CPPFLAGS} .= " -I$p/include"
+            $make_vars{LDFLAGS} .= " -L$p/lib64"
+            $(if:a=cuda)
+                $make_vars{LIBS} .= " -lcudart -lcuda"
+            $(elif:a=hip)
+                $make_vars{LIBS} .= " -lhip"
+            $(elif:a=ze)
+                $make_vars{LIBS} .= " -lze_loader"
+    # $conds{MPL_HAVE_ZE} = 1
+    load_automake("src/mpl/Makefile.am", \%conds)
+    @programs=()
+    dump_makefile("src/mpl/Makefile")
+
+#---------------------------------------- 
+subcode: config_init_pmi
+    $config_in = "$mymake_dir/config_templates/pmi_config.h"
+    $config_out = "src/pmi/include/pmi_config.h"
+    symlink "../../libtool", "src/pmi/libtool"
+
+subcode: config_pmi
+    $call ac_init, PMI, 1.2, -, pmi, -
+    $call set_config_defines
+
+    subcode: set_config_defines
+        $config_defines{HAVE_MPI_H} = 1
+        $config_defines{USE_PMI_PORT} = 1
+        $config_defines{HAVE_THREADS} = 1
+        $config_defines{HAVE_ERROR_CHECKING} = 1
+
+subcode: make_pmi
+    $call copy_subdir_module, mpl
+
+    my %conds
+    $conds{EMBEDDED_MODE} = 1
+    $autoconf_vars{mpl_includedir} = "-I../mpl/include -I../include"
+
+    push @extra_make_rules, "test_pmi1: examples/test_pmi1.o libpmi.la"
+    push @extra_make_rules, "\t\@echo LTLD \$@ && \x24(LTLD) -o \$@ \$^ ../mpl/libmpl.la"
+
+    load_automake("src/pmi/Makefile.am", \%conds)
+    @programs=()
+    dump_makefile("src/pmi/Makefile")
+
+#---------------------------------------- 
+subcode: config_init_opa
+    $config_prefix = "opa"
+    $config_in = "$mymake_dir/config_templates/opa_config.h"
+    $config_out = "mymake/openpa/src/opa_config.h"
+    symlink "../../../libtool", "mymake/openpa/src/libtool"
+
+subcode: config_opa
+    $call ac_init, OpenPA, 1.0.3, https://trac.mcs.anl.gov/projects/openpa/newticket, openpa, -
+    $call set_config_defines
+
+    subcode: set_config_defines
+        $config_defines{OPA_HAVE_GCC_INTRINSIC_ATOMICS} = 1
+        $config_defines{OPA_HAVE_GCC_X86_32_64} = 1
+        $config_defines{OPA_HAVE_GCC_X86_32_64_P3} = 1
+
+        $config_defines{HAVE_LIBPTHREAD}=1
+        $config_defines{OPA_MAX_NTHREADS} = 100
+
+        $config_defines{SIZEOF_INT} = $sizeof_hash{INT}
+        $config_defines{SIZEOF_VOID_P} = $sizeof_hash{VOID_P}
+
+subcode: make_opa
+    $call copy_subdir_module, opa
+    $autoconf_vars{OPALIBNAME} = "opa"
+    $make_vars{DEFAULT_INCLUDES} = "-I." # path to ope_config.h
+    my %conds
+    $conds{EMBEDDED} = 1
+    load_automake("mymake/openpa/src/Makefile.am", \%conds)
+    @programs=()
+    dump_makefile("mymake/openpa/src/Makefile")

@@ -1,0 +1,24 @@
+# -- config_h --
+subcode: mymake_config(config_in, config_out)
+    $global %config_defines
+    my @lines
+    &call open_r, $(config_in)
+        $if /^#undef\s+(\w+)/ -> $a
+            $call define_it, $a, $config_defines{$a}
+        $elif /^# undef (\w+)/ and $config_defines{$1}
+            # AC_USE_SYSTEM_EXTENSIONS
+            push @lines, "# define $1 1\n"
+        $else
+            push @lines, $_
+
+    &call open_W, $(config_out)
+        $foreach $l in @lines
+            print Out $l
+
+    # -----
+    subcode: define_it(a, val)
+        $if defined $(val)
+            push @lines, "#define $(a) $(val)\n"
+        $else
+            push @lines, "\x2f* #undef $(a) */\n"
+

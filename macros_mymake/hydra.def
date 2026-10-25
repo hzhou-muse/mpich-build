@@ -1,0 +1,112 @@
+#---- mymake_hydra.pl -------------------- 
+subcode: prepare_hydra
+    $(setmacro:makefile=hydra)
+
+    my $dir="src/pm/hydra"
+    chdir $dir or die "Can't chdir $dir\n"
+    my $srcdir = "../../.."
+    $pwd = getcwd()
+
+    $if !-d "mymake"
+        mkdir "mymake" or die "can't mkdir mymake\n"
+    $if !-f "mymake/Makefile.orig"
+        $call hydra_config
+
+    my $bin="\x24(PREFIX)/bin"
+    $dst_hash{"LN_S-$bin/mpiexec"}="$bin/mpiexec.hydra"
+    $dst_hash{"LN_S-$bin/mpirun"}="$bin/mpiexec.hydra"
+
+    $call need_mpl, hydra
+    $if -f "$srcdir/src/pmi/configure.ac"
+        $call need_pmi, hydra
+    $call need_hwloc
+    $call @check_argobots
+    $call custom_make, hydra
+
+    subcode: check_argobots
+        $if $opts{argobots}
+            $I_list .= " -I$opts{argobots}/include"
+            $L_list .= " -L$opts{argobots}/lib -labt"
+
+# -------------------
+subcode: hydra_config
+    system "mkdir -p confdb && cp -r $srcdir/confdb/. confdb/"
+    system "cp $srcdir/maint/version.m4 ."
+
+    &call modify_frame, temporary
+        $call modify_hydra_configure
+        &call modify, Makefile.am
+            $if $l=~/ACLOCAL_AMFLAGS/
+                $l ="ACLOCAL_AMFLAGS = -I confdb\n"
+
+        my $hwloc_mk = "tools/topo/hwloc/Makefile.mk"
+        $if -f "lib/$hwloc_mk"
+            $hwloc_mk = "lib/$hwloc_mk"
+        &call modify, $hwloc_mk
+            $if $l=~/if\s+HYDRA_USE_EMBEDDED_HWLOC/i
+                $flag_skip=1
+                next
+            $elif $l=~/endif/
+                $flag_skip=0
+                next
+        system "libtoolize && autoreconf -ivf"
+    system "rm -f Makefile"
+    system "./configure"
+    $call patch_config_h
+    system "mv libtool mymake/libtool.orig"
+    $call patch_libtool, mymake/libtool.orig
+    system "mv Makefile mymake/Makefile.orig"
+
+    # ------------------------------
+    subcode: modify_hydra_configure
+        &call modify, configure.ac
+            $if $l=~/^\s*HWLOC_/
+                next
+            $elif $l=~/^(\s*)(PAC_CONFIG_SUBDIR|PAC_CONFIG_ALL_SUBDIRS|PAC_CONFIG_MPL)/
+                next
+            $elif $l=~/^(\s*)PAC_CONFIG_HWLOC/
+                $l = "$1"."pac_have_hwloc=yes\n"
+
+    subcode: patch_config_h
+        my (@lines, $flag)
+        my $config_h = "include/hydra_config.h"
+        $if !-d "include"
+            $config_h = "hydra_config.h"
+        &call open_r, $config_h
+            $if /#define HYDRA_DEFAULT_TOPOLIB NULL/
+                push @lines, "#define HYDRA_DEFAULT_TOPOLIB \"hwloc\"\n"
+                $flag = 1
+            $else
+                push @lines, $_
+        $if $flag
+            &call open_W, $config_h
+                $foreach $l in @lines
+                    $print $l
+
+#---- rules in mpich Makefile ------------------ 
+subcode: add_rule_hydra(name)
+    my $mkfile="src/pm/$(name)/Makefile"
+    my $add="$(Lmpl) $(Lpmi) \x24(MODDIR)/$(Lhwloc)"
+    push @extra_make_rules, ".PHONY: $(name) $(name)-install"
+    push @extra_make_rules, "$(name): $mkfile $add"
+    push @extra_make_rules, "\t(cd src/pm/$(name) && \x24(MAKE) )"
+    push @extra_make_rules, ""
+    push @extra_make_rules, "$(name)-install: $mkfile"
+    push @extra_make_rules, "\t(cd src/pm/$(name) && \x24(MAKE) install )"
+    push @extra_make_rules, ""
+    push @extra_make_rules, "$(name)-clean:"
+    push @extra_make_rules, "\t(cd src/pm/$(name) && rm -f Makefile && rm -rf mymake )"
+    push @extra_make_rules, ""
+    push @extra_make_rules, "$mkfile:"
+    $call set_config_args
+    push @extra_make_rules, "\t\x24(DO_hydra) $config_args"
+    push @extra_make_rules, ""
+
+    subcode: set_config_args
+        my $config_args = "--prefix=\x24(PREFIX)"
+        $if $opts{"with-argobots"}
+            $config_args .= " --with-argobots=$opts{argobots}"
+        $if $opts{"with-cuda"}
+            $config_args .= " --with-cuda=$opts{'with-cuda'}"
+        $if $opts{"with-hip"}
+            $config_args .= " --with-hip=$opts{'with-hip'}"

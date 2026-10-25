@@ -1,0 +1,90 @@
+subcode: config_init_hydra
+    $config_in = "$mymake_dir/config_templates/hydra_config.h"
+    $if -d "src/pm/hydra/include"
+        $config_out = "src/pm/hydra/include/hydra_config.h"
+    $else
+        $config_out = "src/pm/hydra/hydra_config.h"
+    symlink "../../../libtool", "src/pm/hydra/libtool"
+
+subcode: config_hydra
+    $call ac_init, Hydra, $version, -, hydra, -
+    $call set_config_defines
+    $call patch_launcher_rmk
+
+    subcode: patch_launcher_rmk
+        my @launchers=qw(ssh rsh fork slurm ll lsf sge manual persist)
+        my @rmks=qw(user slurm ll lsf sge pbs cobalt)
+        my @demuxes=qw(poll select)
+        my @topolibs=qw(hwloc)
+        my %confs
+        $confs{hydra_launcher_array} = ' "'. join('",  "', @launchers). '",  NULL'
+        $confs{hydra_rmk_array}      = ' "'. join('",  "', @rmks). '",  NULL'
+        $confs{hydra_launcher_init_array} = ' HYDT_bsci_launcher_'. join('_init,  HYDT_bsci_launcher_', @launchers). '_init,  NULL'
+        $confs{hydra_rmk_init_array} = ' HYDT_bsci_rmk_'. join('_init,  HYDT_bsci_rmk_', @rmks). '_init,  NULL'
+        $if -f "src/pm/hydra/lib/tools/bootstrap/src/bsci_init.c.in"
+            autoconf_file("src/pm/hydra/lib/tools/bootstrap/src/bsci_init.c", \%confs)
+        $else
+            autoconf_file("src/pm/hydra/tools/bootstrap/src/bsci_init.c", \%confs)
+
+        $(for:as, a in demuxes, launchers, rmks, topolibs and demux,launcher,rmk,topolib)
+            $config_defines{HYDRA_AVAILABLE_$(as:uc)} = "\"@$(as)\""
+            $config_defines{HYDRA_DEFAULT_$(a:uc)} = "\"$$(as)[0]\""
+        # needed by v3.3.2
+        $config_defines{HYDRA_AVAILABLE_CKPOINTLIBS}='""'
+
+    subcode: set_config_defines
+        $call AC_USE_SYSTEM_EXTENSIONS
+        $config_defines{HYDRA_CC} = "\"$opts{CC} -g -O2   \""
+        $config_defines{HYDRA_CONFIGURE_ARGS_CLEAN} = "\"'CC=' 'CFLAGS=-g -O2'\""
+        $config_defines{HYDRA_PMI_PROXY} = '"hydra_pmi_proxy"'
+        $config_defines{HYDRA_RELEASE_DATE} = '"unreleased development copy"'
+        $config_defines{HYDRA_VERSION} = $config_defines{VERSION}
+        
+        $config_defines{HAVE_HWLOC} = 1
+        $config_defines{USE_SIGACTION} = "\x2f**/"
+
+        $config_defines{HAVE_BSS_EXTERNAL}=1
+        $config_defines{HAVE_BSS_PERSIST}=1
+        $config_defines{HAVE_ERROR_CHECKING}=1
+        $config_defines{HAVE_EXTERN_ENVIRON}=1
+        $if $opts{uname}=~/FreeBSD|Darwin/i
+            $config_defines{MANUAL_EXTERN_ENVIRON}=1
+        $config_defines{ENABLE_PROFILING}=1
+
+        $(for:CXX,F77,F90)
+            $config_defines{HYDRA_$1}="\"$opts{$1} \""
+
+        delete $config_defines{HAVE_ALLOCA}
+        $(for:a in fcntl,getifaddrs,getpgid,gettimeofday,hstrerror,inet_ntop,isatty,killpg,poll,posix_regcomp,setsid,sigaction,sigset,stat,strsignal,time,unsetenv,usleep)
+            $config_defines{HAVE_$(a:uc)}=1
+
+        # overwrite
+        delete $headers_hash{SLURM_SLURM_H}
+
+subcode: make_hydra
+    $call need_mpl, hydra
+    $if -f "src/pmi/configure.ac"
+        $call need_pmi, hydra
+    $call need_hwloc
+    my %conds
+    $conds{HYDRA_HAVE_HWLOC}=1
+    $conds{hydra_have_hwloc}=1 # v3.3.2
+    $conds{hydra_bss_external}=1 # --with-hydra-bss=[user,ssh,fork,slurm,ll,lsf,sge,pbs,cobalt,manual,persist]
+    $conds{hydra_bss_persist}=1
+    $conds{hydra_have_poll}=1   # --with-hydra-demux=[poll,select,port]
+    $conds{hydra_have_select}=1
+    $conds{hydra_have_port}=1
+    $conds{hydra_pm_pmiserv}=1  # --with-hydra-pm=[pmiserv]
+    $conds{hydra_ui_mpich}=1    # --with-hydra-ui=[mpich]
+
+    $make_vars{DEFAULT_INCLUDES} = ("-I. -I./include")      # path to config.h
+    load_automake("src/pm/hydra/Makefile.am", \%conds)
+
+    $make_vars{libhydra_la_LIBADD} .= " $L_list"
+    $foreach $a in "hydra_nameserver", "hydra_persist", "hydra_pmi_proxy", "mpiexec_hydra"
+        $make_vars{"${a}_LDADD"} =~s/-l(hydra|pm)/lib$1.la/g
+    my $bin="\x24(PREFIX)/bin"
+    $dst_hash{"LN_S-$bin/mpiexec"}="$bin/mpiexec.hydra"
+    $dst_hash{"LN_S-$bin/mpirun"}="$bin/mpiexec.hydra"
+
+    dump_makefile("src/pm/hydra/Makefile", "../../../mymake")

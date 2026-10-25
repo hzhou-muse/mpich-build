@@ -1,0 +1,434 @@
+include: macros_common/mymake.def
+include: macros_common/mymake/config.def
+include: macros_common/mymake/automake.def
+include: macros_common/mymake/makefile.def
+
+include: macros_mymake/args.def
+include: macros_mymake/defines.def
+include: macros_mymake/subdirs.def
+include: macros_mymake/mpich.def
+include: macros_mymake/bindings.def
+
+include: macros_mymake/config_mpich.def
+include: macros_mymake/config_mpl.def
+include: macros_mymake/config_hydra.def
+include: macros_mymake/config_fortran.def
+include: macros_mymake/config_test.def
+include: macros_mymake/config_romio.def
+
+# Goal: skip autoconf and produce mpichconf.h
+# Input:        %opts
+#               @config_args
+# Output:       mpichconf.h
+
+output_dir: ./mymake
+
+macros:
+    config_cases: mpich, mpl, pmi, opa, hydra, fortran, test, dtpools, romio
+    # showcond: 1
+    # showload: 1
+
+page: mymake_config
+    module: perl
+
+    $global $config, $config_in, $config_out, $config_prefix
+    $config = shift @ARGV
+    $print -- mymake_config $config ...
+
+    $(for:a in $(config_cases))
+        $case $config eq "$(a)"
+            $call config_init_$(a)
+    $else
+        die "Usage: $0 [mpich]\n"
+
+    $global %config_defines
+    $call load_opts
+    $call init_config_defines
+
+    $call get_file_in_t, mymake/args
+    my @tlist = split /\s+/, $t
+    $foreach $a in @tlist, @ARGV
+        $if 0
+            NOOP
+        $call filter_config_defines
+    # $call post_config_defines
+
+    $call load_maint_version
+
+    $call set_cc
+    $call get_c_sizeof
+    $call get_c_headers
+    $call get_c_features
+
+    $(for:a in $(config_cases))
+        $case $config eq "$(a)"
+            $(if:a!=mpich)
+                $call load_make_opts
+            $call config_$(a)
+            $(if:a=mpich)
+                $call dump_make_opts
+
+    $call collect_config_h
+    $call dump_config_h
+
+page: mymake_makefile
+    module: perl
+
+    my $what=shift @ARGV
+    $if !$what
+        $what = "mpich"
+    $print -- mymake_makefile $what ...
+
+    $call load_opts
+    $call load_make_opts
+    $call make_init
+
+    $(set:quick=1)
+    $(for:a in $(config_cases))
+        $case $what eq "$(a)"
+            $call make_$(a)
+    $else
+        die "[$what] not implemented\n"
+
+    subcode: make_init
+        $global @config_args
+        $global %autoconf_vars, %make_vars
+        $global @ltlibs, @programs
+        %make_vars = ()
+        @ltlibs = ()
+        @programs = ()
+
+        $make_vars{LIBTOOL} = "./libtool"
+        $(for:CC,CXX,F77,FC and gcc,g++,gfortran,gfortran)
+            $if !$opts{$1}
+                $make_vars{$1} = "$2"
+            $else
+                $make_vars{$1} = $opts{$1}
+        $make_vars{CCLD} = $make_vars{CC}
+        $make_vars{CXXLD} = $make_vars{CXX}
+        $make_vars{FCLD} = $make_vars{FC}
+        $make_vars{DEFS} = "-DHAVE_CONFIG_H"
+
+        $make_vars{CFLAGS} = $opts{cflags}
+        $make_vars{LDFLAGS} = $opts{ldflags}
+        $make_vars{FFLAGS} = '-O2'
+        $make_vars{FCFLAGS} = '-O2'
+
+        $make_vars{EXEEXT}=""
+        $make_vars{OBJEXT}="o"
+
+        /* suppress expansion */
+        $make_vars{"MODS"} = "-"
+        $make_vars{"MODDIR"} = "-"
+        $make_vars{"PREFIX"} = "-"
+
+#---------------------------------------- 
+subcode: dump_make_opts
+    &call open_W, mymake/make_opts.mpich
+        $(for:a in CC,CXX,F77,FC,cc_version,cc_weak)
+            $print $(a): $opts{$(a)}
+        my $cflags = "-g -O2"
+        my $ldflags = ""
+        $(for:a in cflags, ldflags)
+            $if $opts{$(a)}
+                $$(a) = $opts{$(a)}
+            $call modify_$(a), $$(a)
+            $print $(a): $$(a)
+
+subcode: load_make_opts
+    &call open_r, mymake/make_opts.mpich
+        $if /^(\w+):\s*(.+)/
+            $opts{$1} = $2
+
+#---------------------------------------- ---------------------------
+#---- mymake_config macros
+#---------------------------------------- ---------------------------
+fncode: autoconf_file($file, $conf_hash)
+    my @lines
+    &call open_r, $file.in
+        s/\@(\w+)\@/$conf_hash->{$1}/g
+        push @lines, $_
+    &call open_W, $file
+        $foreach $l in @lines
+            print Out $l
+#---------------------------------------- 
+subcode: collect_config_h
+    &call open_r, $config_in
+        $if /^#undef\s+(\w+)/ -> $a
+            $if exists $config_defines{$a}
+                NOOP
+            $elif $a=~/(SIZEOF|ALIGNOF)_(?:UNSIGNED_)?(\w+)/
+                $if $sizeof_hash{$2}
+                    $config_defines{$a} = $sizeof_hash{$2}
+                $else
+                    $config_defines{$a} = 0
+            $elif $a=~/HAVE_(?:UNSIGNED_)?(\w+)/ and $sizeof_hash{$1} and $1 ne "LONG_LONG"
+                $config_defines{$a} = 1
+            $elif $a=~/HAVE_(\w+_H)/
+                $if $headers_hash{$1}
+                    $config_defines{$a} = 1
+
+subcode: dump_config_h
+    my $P
+    $if $config_prefix
+        $P = uc($config_prefix)
+
+    my @lines
+    &call open_r, $config_in
+        $if /^#undef\s+(\w+)/ -> $a
+            $if $config_prefix
+                $call define_it_prefix, $a, $config_defines{$a}, $config_defines{"${P}_$a"}
+            $else
+                $call define_it, $a, $config_defines{$a}
+        $elif /^# undef (\w+)/ and $config_defines{$1}
+            # AC_USE_SYSTEM_EXTENSIONS
+            push @lines, "# define $1 1\n"
+        $else
+            push @lines, $_
+
+    &call open_W, $config_out
+        $if $config_prefix
+            $print "#ifndef INCLUDE_${P}CONFIG_H"
+            $print "#define INCLUDE_${P}CONFIG_H 1"
+
+        $foreach $l in @lines
+            print Out $l
+
+        $if $config_prefix
+            $print "#endif"
+
+    # -----------------------------
+    subcode: define_it(a, val)
+        $if defined $(val)
+            push @lines, "#define $(a) $(val)\n"
+        $else
+            push @lines, "\x2f* #undef $(a) */\n"
+
+    subcode: define_it_prefix(a, val, val2)
+        my $b = "${P}_$(a)"
+        $if $(a)=~/^(_|${P}_|const|inline|restrict)/
+            $b = $(a)
+        $elif $(a)=~/^[a-z]/
+            $b = "_${config_prefix}_$(a)"
+
+        my $val = $(val)
+        $if defined $(val2)
+            $val = $(val2)
+        $if defined $val
+            push @lines, "#ifndef $b\n"
+            push @lines, "#define $b $val\n"
+            push @lines, "#endif\n"
+        $else
+            push @lines, "\x2f* #undef $b */\n"
+
+#---------------------------------------- 
+subcode: set_cc
+    $(for:CC,CXX,F77,FC and gcc,g++,gfortran,gfortran)
+        $if $ENV{$1}
+            $opts{$1} = $ENV{$1}
+        $else
+            $opts{$1} = "$2"
+    $opts{cc_version} = get_cc_version($opts{CC})
+    $if $opts{cc_version}=~/gcc 4/
+        $opts{CC} .= " -std=gnu99"
+
+subcode: ac_init(package, version, bugreport, tarname, url)
+    $(for:package, version, bugreport, tarname, url)
+        $(if:$1=-)
+            $(set-1:$1=)
+    $config_defines{PACKAGE}='"$(tarname)"'
+    $config_defines{PACKAGE_BUGREPORT}='"$(bugreport)"'
+    $config_defines{PACKAGE_NAME}='"$(package)"'
+    $config_defines{PACKAGE_STRING}="\"$(package) $(version)\""
+    $config_defines{PACKAGE_TARNAME}='"$(tarname)"'
+    $config_defines{PACKAGE_URL}='"$(url)"'
+    $config_defines{PACKAGE_VERSION}="\"$(version)\""
+    $config_defines{VERSION}="\"$(version)\""
+
+#----
+subcode: AC_USE_SYSTEM_EXTENSIONS
+    $(for:_ALL_SOURCE,_GNU_SOURCE,_POSIX_PTHREAD_SEMANTICS,_TANDEM_SOURCE,__EXTENSIONS__) 
+        $config_defines{$1}=1
+    # _MINIX,_POSIX_1_SOURCE,_POSIX_SOURCE
+
+#---- SIZEOF ------------------------------------ 
+subcode: get_c_sizeof
+    $global %sizeof_hash
+    my @header_list=("stdio.h")
+    my @type_list=("void *", "char", "short", "int", "long", "long long", "size_t", "off_t", "float", "double", "long double")
+    $if $config eq "mpich"
+        $call additional_types
+    get_sizeof(\@type_list, \@header_list)
+
+    $if $config eq "mpich"
+        $call get_c_sizeof_mpich
+
+    # -- mpich ---------------------
+    subcode: additional_types
+        $(for:short, int, long, float, double, long double)
+            push @type_list, "pair:$1"
+
+        push @header_list, "stdint.h"
+        $(for:8,16,32,64)
+            push @type_list, "int$1_t", "uint$1_t"
+
+        push @header_list, "stdbool.h"
+        push @type_list, "bool"
+
+        $(for:float, double, long double)
+            push @type_list, "$1 _Complex"
+
+fncode: get_sizeof($typelist, $headerlist)
+    my $tname="t-$$"
+    $call dump_c_test, mymake/$tname.c
+
+    my $t = `$opts{CC} mymake/$tname.c -o mymake/$tname.out 2>/dev/null && mymake/$tname.out`
+    $if $? == 0
+        $while $t=~/A(\d+):\s+(\d+)/g
+            my $name = get_config_name($typelist->[$1]);
+            $sizeof_hash{$name} = $2
+        return 1
+    $else
+        return 0
+
+    subcode: dump_c_test(c_file)
+        &call open_w, $(c_file)
+            $foreach $t in @$headerlist
+                print Out "#include <$t>\n"
+            print Out "int main() {\n"
+            $foreach $i, $type in @$typelist
+                $if $type=~/pair:(.+)/
+                    print Out "    struct {$1 a; int b;} A$i;\n"
+                    print Out "    printf(\"A$i: %lu\\n\", sizeof(A$i));\n"
+                $else
+                    print Out "    printf(\"A$i: %lu\\n\", sizeof($type));\n"
+            print Out "    return 0;\n"
+            print Out "}\n"
+
+#---- HAVE_HEADER_H ------------------------------------ 
+subcode: get_c_headers
+    $global %headers_hash
+    my @header_list
+    &call open_r, $config_in
+        $if /#undef HAVE_(\w+)_H\b/
+            my $h=lc($1).".h"
+            $h=~s/_/\//g
+            push @header_list, $h
+    get_have_headers(\@header_list)
+    $config_defines{STDC_HEADERS}=1
+
+fncode: get_have_headers($headerlist)
+    $call load_cpp_paths
+    $foreach $h in @$headerlist
+        my $name = uc(get_config_name($h))
+        $foreach $dir in @cpp_paths
+            $if -e "$dir/$h"
+                $headers_hash{$name} = "$dir/$h"
+                # $print $name:\t$dir/$h
+                last
+
+    subcode: load_cpp_paths
+        my @cpp_paths
+        my $cpp = `$opts{CC} -print-prog-name=cpp` # for cxx, cc1plus
+        chomp $cpp
+        $if $cpp
+            my $t = `$cpp -v </dev/null 2>&1`
+            $if $t=~/#include <...> search starts here:(.*)End of search list./s
+                my $t2 = $1
+                $while $t2=~/(\S+)/g
+                    push @cpp_paths, $1
+                    # $print -  $1
+
+#---- misc COMPILER features ------------------------------------ 
+subcode: get_c_features
+    # not really used
+    $config_defines{HAVE_ANY_INT64_T_ALIGNMENT}=1
+    $config_defines{HAVE_ANY_INT32_T_ALIGNMENT}=1
+    $config_defines{LT_OBJDIR} = '".libs/"'
+
+    # compiler features
+    $config_defines{HAVE__FUNC__}="\x2f**/"
+    $config_defines{HAVE__FUNCTION__}="\x2f**/"
+    $(for:a in PRAGMA_WEAK_ALIAS,MULTIPLE_PRAGMA_WEAK, GCC_ATTRIBUTE, MACRO_VA_ARGS, VA_COPY, VISIBILITY, BUILTIN_EXPECT, C11__STATIC_ASSERT, H_ADDR_LIST, SCHED_GETAFFINITY, SCHED_SETAFFINITY, SETITIMER, STRUCT_RANDOM_DATA)
+        $config_defines{HAVE_$(a)}=1
+    $config_defines{HAVE_PRAGMA_WEAK}=1
+    $config_defines{USE_WEAK_SYMBOLS}=1
+    $config_defines{WORDS_LITTLEENDIAN}=1
+
+    $config_defines{restrict} = '__restrict'
+    $config_defines{HAVE_FC_TYPE_ROUTINES} = 1
+
+    # functions
+    $(for:a in alarm,alloca,gethostname,putenv,qsort,random_r, signal, snprintf, strdup, strerror, strerror_r, strncmp, strncasecmp, vsnprintf, vsprintf, mkstemp, CPU_SET_T, CPU_SET_MACROS, DECL_STRERROR_R, posix_memalign, select, sched_yield, pthread_yield, mmap, munmap, inet_pton)
+        $config_defines{HAVE_$(a:uc)}=1
+    
+    # (more) system-specific
+    $if $opts{uname}=~/Linux/i
+        $config_defines{USE_SYM_HEAP} = 1
+        $config_defines{STRERROR_R_CHAR_P} = 1
+        $if $opts{CC}=~/icx/
+            $config_defines{HAVE_PRAGMA_WEAK} = undef
+            $config_defines{HAVE_MULTIPLE_PRAGMA_WEAK} = undef
+    $if $opts{uname}=~/Darwin/i
+        $(for:a in PRAGMA_WEAK,PRAGMA_WEAK_ALIAS,MULTIPLE_PRAGMA_WEAK)
+            $config_defines{HAVE_$(a)} = undef
+        $config_defines{USE_WEAK_SYMBOLS} = undef
+        $opts{cc_weak} = "no"
+        $opts{cflags} = "-O2 -fno-common -g"
+
+#---------------------------------------- 
+fncode: get_config_name($type)
+    $if $type=~/pair:(.+)/
+        $if $1 eq "int"
+            return "TWO_INT"
+        $else
+            $type="$1 int"
+    $elif $type eq "__float128"
+        $type = "float128"
+
+    $type =~ tr/\* \/./p_/
+    return uc($type)
+
+#---------------------------------------- ---------------------------
+#---- mymake_makefile macros
+#---------------------------------------- ---------------------------
+#---------------------------------------- 
+subcode: modify_frame
+    BLOCK
+    subcode: modify(f)
+        $(block:null)
+            BLOCK
+
+#---------------------------------------- 
+fncode: get_cc_version($cc)
+    my $t
+    $if $cc =~/sun/
+        $t = `$cc -V`
+    $else
+        $t=`$cc --version`
+    $if $t=~/^(gcc) .*? ([0-9\.]+)/m
+        return "$1 $2"
+    $elif $t=~/^(clang) version ([0-9\.]+)/m
+        return "$1 $2"
+    $elif $t=~/^(Apple LLVM) version ([0-9\.]+)/m
+        return "clang $2"
+    $elif $t=~/^(icc) .*? ([0-9\.]+)/m
+        return "intel $2"
+    $elif $t=~/^(pgcc) .*? ([0-9\.]+)/m
+        return "pgi $2"
+    $elif $t=~/^(Studio) ([0-9\.]+)/m
+        return "sun $2"
+    $else
+        return "unknown"
+
+fncode: test_cc_header($cc, $header)
+    &call open_w, mymake/t.c
+        print Out "#include <$header>\n"
+        print Out "int main(){return 0;}\n"
+    system "$cc -c -o mymake/t.o mymake/t.c 2>/dev/null"
+    # $print ? = $?
+    $if $? == 0
+        return 1
+    $else
+        return 0
+

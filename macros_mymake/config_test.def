@@ -1,0 +1,216 @@
+subcode: init_MPICC
+    my $MPICC = "mpicc"
+    $if $opts{"enable-mpi-abi"}
+        $MPICC = "mpicc_abi"
+
+subcode: config_init_test
+    $call init_MPICC
+    $config_in = "$mymake_dir/config_templates/mpitestconf.h"
+    $config_out = "test/mpi/include/mpitestconf.h"
+    $if $ENV{CC}
+        system "sed -e 's/\"$ENV{CC}\"/\"$MPICC\"/' libtool > test/mpi/libtool"
+    $else
+        system "sed -e 's/\"gcc\"/\"$MPICC\"/' libtool > test/mpi/libtool"
+    system "chmod a+x test/mpi/libtool"
+    $if -f "test/mpi/maint/gen_all_mpitests.py"
+        chdir "test/mpi"
+        system "python maint/gen_all_mpitests.py"
+        chdir "../.."
+
+subcode: config_test
+    $call init_MPICC
+    $call ac_init, mpich-testsuite, $version, discuss@mpich.org, mpich-testsuite, http://www.mpich.org/
+    $call set_config_defines
+    $if -e "test/mpi/runtests.in"
+        $call patch_runtests
+    $call patch_testlists
+    $if !$opts{disable_fortran}
+        $call patch_f77_tests
+
+    subcode: set_config_defines
+        $config_defines{F77_NAME_LOWER_USCORE} = 1
+        # datatypes
+        $(for:a in float,double,long_double)
+            $config_defines{HAVE_$(a:uc)__COMPLEX} = 1
+        $(for:a in long_long,_bool)
+            $config_defines{HAVE_$(a:uc)} = 1
+
+        $config_defines{HAVE_MPI_INTEGER16} = 1
+        $config_defines{USE_LONG_DOUBLE_COMPLEX} = 1
+
+        $if $sizeof_hash{VOID_P} == $sizeof_hash{LONG}
+            $config_defines{POINTERINT_t} = "long"
+        $elif $sizeof_hash{VOID_P} == $sizeof_hash{LONG_LONG}
+            $config_defines{POINTERINT_t} = "long long"
+
+        $config_defines{SIZEOF_MPI_OFFSET} = $sizeof_hash{VOID_P}
+
+        $config_defines{MPIO_USES_MPI_REQUEST} = 1
+        # getrusage
+        # $config_defines{HAVE_GETRUSAGE} = 1
+
+        # mpi
+        $config_defines{THREAD_PACKAGE_NAME} = "THREAD_PACKAGE_POSIX"
+        $config_defines{HAVE_MPI_WIN_CREATE} = 1
+        $if $opts{device}!~/ch4:ucx/
+            $config_defines{HAVE_MPI_SPAWN} = 1
+
+        $if $opts{"with-cuda"}
+            $config_defines{HAVE_GPU} = 1
+            $config_defines{HAVE_CUDA} = 1
+        $elif $opts{"with-hip"}
+            $config_defines{HAVE_GPU} = 1
+            $config_defines{HAVE_HIP} = 1
+
+    subcode: patch_runtests
+        my %confs
+        $confs{PERL}="/usr/bin/perl"
+        $confs{MPIEXEC} = "mpiexec"
+        $confs{MPI_IS_STRICT} = "false"
+        $confs{RUN_XFAIL} = "false"
+        autoconf_file("test/mpi/runtests", \%confs)
+        system "chmod a+x test/mpi/runtests"
+
+    subcode: patch_testlists
+        my %confs
+        my @all_testlists = glob("test/mpi/*/testlist.in")
+        push @all_testlists, glob("test/mpi/*/*/testlist.in")
+        $foreach $a in @all_testlists
+            $a=~s/\.in$//
+            autoconf_file($a, \%confs)
+
+    subcode: patch_f77_tests
+        my %confs
+        $confs{F77_MPI_ADDRESS} = "INTEGER*8"
+        $confs{F77_MPI_OFFSET} = "INTEGER*8"
+        $foreach $f in glob("test/mpi/f77/*/*.h.in test/mpi/errors/f77/*/*.h.in")
+            $f=~s/\.in$//
+            autoconf_file($f, \%confs)
+
+subcode: make_test
+    $call init_MPICC
+    my %conds
+    $conds{BUILD_MPIX_TESTS} = 1
+    $autoconf_vars{threadlib} = "-lpthread"
+    my @all_am = glob("test/mpi/*/Makefile.am")
+    push @all_am, glob("test/mpi/threads/*/Makefile.am")
+    push @all_am, glob("test/mpi/errors/*/Makefile.am")
+    push @all_am, glob("test/mpi/impls/mpich/*/Makefile.am")
+    push @all_am, glob("test/mpi/impls/mpich/*/*/Makefile.am")
+    $if !$opts{disable_fortran}
+        $conds{HAS_F77} = 1
+        push @all_am, glob("test/mpi/f77/*/Makefile.am")
+    # $foreach $dir in "attr", "comm", "datatype", "pt2pt", "coll", "rma", "threads/pt2pt"
+    $foreach $a in @all_am
+        my $dir
+        $if $a =~ /test\/mpi\/(.*)\/Makefile.am/
+            $dir = $1
+            my @t = glob("test/mpi/$dir/*/Makefile.am")
+            $if @t
+                next
+        $else
+            next
+
+        $call @make_init
+        $call set_top_srcdir, $dir
+        load_automake("test/mpi/$dir/Makefile.am", \%conds)
+
+        @extra_make_rules=()
+        $call add_make_rule, dtpools/src/libdtpools.la, dtpools/src, libdtpools.la
+        $call add_make_rule, util/libmtest_single.la, util, libmtest_single.la
+        $if -f "test/mpi/maint/gen_all_mpitests.py"
+            $call add_make_rule, util/librun_mpitests.la, util, librun_mpitests.la
+        $if $a =~ /threads/
+            $call add_make_rule, util/libmtest_thread.la, util, libmtest_thread.la
+        $if $a =~ /datatype/
+            $call add_make_rule, util/libdtypes.la, util, libdtypes.la
+        $if $a =~ /f77/
+            $call add_make_rule, util/libmtest_f77.la, util, libmtest_f77.la
+
+        my $runtests
+        $if $a =~ /test\/mpi\/(.*)\/Makefile.am/
+            $runtests="$1/runtests"
+            $runtests=~s/[^\/]+\//..\//g
+
+        push @extra_make_rules, "testing:"
+        push @extra_make_rules, "\t$runtests -tests=testlist"
+        push @extra_make_rules, ""
+
+        $if $opts{"with-cuda"}
+            my $p = $opts{"with-cuda"}
+            $conds{HAVE_CUDA} = 1
+            $make_vars{CPPFLAGS} .= " -I$p/include"
+            $make_vars{LDFLAGS} .= " -L$p/lib64"
+            $make_vars{LIBS} .= " -lcudart -lcuda"
+        $elif $opts{"with-hip"}
+            my $p = $opts{"with-hip"}
+            $conds{HAVE_HIP} = 1
+            $make_vars{CPPFLAGS} .= " -I$p/include"
+            $make_vars{LDFLAGS} .= " -L$p/lib64"
+            $make_vars{LIBS} .= " -lamdhip64"
+
+        $make_vars{LIBTOOL} = "$top_srcdir/libtool"
+        $make_vars{CC} = "$MPICC"
+        $make_vars{CXX} = "mpicxx"
+        $make_vars{FC} = "mpifort -fcray-pointer"
+        $if $opts{FC}=~/gfortran/
+            # gfortran >= 10 rejects mpif.h-style mismatched arguments
+            $make_vars{FC} .= " -fallow-argument-mismatch"
+        $make_vars{CCLD} = "$MPICC"
+        $make_vars{CXXLD} = "mpicxx"
+        $make_vars{FCLD} = "mpifort"
+        $if $dir=~/f77/
+            $opts{ld_default} = "FCLD"
+            dump_makefile("test/mpi/$dir/Makefile")
+            undef $opts{ld_default}
+        $else
+            dump_makefile("test/mpi/$dir/Makefile")
+    $if -e "test/mpi/util/run_mpitests.c"
+        $call @make_init
+        my $top_srcdir = "."
+        $make_vars{top_srcdir}="."
+        load_automake("test/mpi/Makefile.am", \%conds)
+
+        @extra_make_rules=()
+        $call add_make_rule, dtpools/src/libdtpools.la, dtpools/src, libdtpools.la
+        $call add_make_rule, util/libmtest_single.la, util, libmtest_single.la
+
+        $make_vars{LIBTOOL} = "$top_srcdir/libtool"
+        $make_vars{CC} = "$MPICC"
+        $make_vars{CCLD} = "$MPICC"
+
+        dump_makefile("test/mpi/Makefile")
+
+    subcode: add_make_rule(target, dir, sub_target, @dep)
+        $(if:dep)
+            push @extra_make_rules, "$top_srcdir/$(target): $top_srcdir/$(dep)"
+        $(else)
+            push @extra_make_rules, "$top_srcdir/$(target):"
+        push @extra_make_rules, "\t(cd $top_srcdir/$(dir) && \x24(MAKE) $(sub_target))"
+        push @extra_make_rules, ""
+
+    subcode: set_top_srcdir(dir)
+        my $top_srcdir = $dir
+        $top_srcdir=~s/[^\/]+/../g
+        $make_vars{top_srcdir}=$top_srcdir
+
+#---------------------------------------- 
+subcode: config_init_dtpools
+    $config_in = "$mymake_dir/config_templates/dtpoolsconf.h"
+    $config_out = "test/mpi/dtpools/dtpoolsconf.h"
+    symlink "../../../libtool", "test/mpi/dtpools/libtool"
+
+subcode: config_dtpools
+    $call ac_init, dtpools, 0.0, discuss@mpich.org, dtpools, -
+    $config_defines{HAVE_MEMSET} = 1
+
+subcode: make_dtpools
+    my %conds
+    $autoconf_vars{DTP_DATATYPES} = "MPI_INT,MPI_INT:4+MPI_DOUBLE:8"
+    load_automake("test/mpi/dtpools/src/Makefile.am", \%conds)
+
+    $make_vars{CC} = "mpicc"
+    $make_vars{INCLUDES} = "-I../include"
+    $make_vars{LIBTOOL} = "/bin/sh ../libtool"
+
+    dump_makefile("test/mpi/dtpools/src/Makefile")

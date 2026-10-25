@@ -1,0 +1,200 @@
+subcode: config_init_fortran
+    $config_in = "$mymake_dir/config_templates/mpifort_config.h"
+    $config_out = "src/binding/fortran/mpifort_config.h"
+    symlink "../../../libtool", "src/binding/fortran/libtool"
+
+subcode: config_fortran
+    $call ac_init, MPIFORT, $version, discuss@mpich.org, mpifort, http://www.mpich.org/
+    $call gen_bindings
+    $call set_config_defines
+    $call patch_localdefs
+    $call patch_mpi_fortran_h_in
+
+    subcode: gen_bindings
+        my @gen_opts
+        push @gen_opts, "-mpi-h=src/include/mpi.h.in"
+        push @gen_opts, "-f77-use-exclaim"
+        push @gen_opts, "-no-real128"
+        # -ignore-tkr, -ignore-tkr-d
+        # assume the defaults for the rest
+        my $opt = join(' ', @gen_opts)
+        system "python maint/gen_binding_f77.py $opt"
+        system "python maint/gen_binding_f90.py $opt"
+        system "python maint/gen_binding_f08.py $opt"
+
+    subcode: set_config_defines
+        # Fortran naming convention -- lowercase with one trailing underscore (Linux default)
+        $config_defines{F77_NAME_LOWER_USCORE} = 1
+
+        # weak symbols
+        $if $opts{cc_weak} ne "no"
+            $config_defines{USE_WEAK_SYMBOLS} = 1
+            $config_defines{HAVE_PRAGMA_WEAK} = 1
+            $config_defines{HAVE_PRAGMA_WEAK_ALIAS} = 1
+            $config_defines{HAVE_MULTIPLE_PRAGMA_WEAK} = 1
+            $config_defines{HAVE_ATTR_WEAK} = 1
+            $config_defines{HAVE_ATTR_WEAK_ALIAS} = 1
+
+        $config_defines{HAVE_VISIBILITY} = 1
+
+        # CHARACTER length as size_t (gfortran 8+)
+        $config_defines{USE_FORT_STR_LEN_SIZET} = 1
+
+        # Fortran integer sizes
+        $config_defines{HAVE_FINT_IS_INT} = 1
+        $if $sizeof_hash{VOID_P} > $sizeof_hash{INT}
+            $config_defines{HAVE_AINT_LARGER_THAN_FINT} = 1
+        $if $sizeof_hash{VOID_P} != $sizeof_hash{INT}
+            $config_defines{HAVE_AINT_DIFFERENT_THAN_FINT} = 1
+
+        # Fortran type sizes
+        $config_defines{MPI_CHARACTER_SIZE} = $sizeof_hash{CHAR}
+        $config_defines{MPI_LOGICAL_SIZE} = $sizeof_hash{INT}
+        $config_defines{MPI_INTEGER_SIZE} = $sizeof_hash{INT}
+        $config_defines{MPI_REAL_SIZE} = $sizeof_hash{FLOAT}
+        $config_defines{MPI_DOUBLE_PRECISION_SIZE} = $sizeof_hash{DOUBLE}
+        $config_defines{MPI_DOUBLE_PRECISION_SUPPORTED} = 1
+
+        # Fortran sizeof for config header
+        $config_defines{SIZEOF_F77_INTEGER} = $sizeof_hash{INT}
+        $config_defines{SIZEOF_F77_REAL} = $sizeof_hash{FLOAT}
+        $config_defines{SIZEOF_F77_DOUBLE_PRECISION} = $sizeof_hash{DOUBLE}
+        $config_defines{SIZEOF_F77_LOGICAL} = $sizeof_hash{INT}
+        $config_defines{SIZEOF_MPI_AINT} = $sizeof_hash{VOID_P}
+        $if $sizeof_hash{LONG} == 8
+            $config_defines{SIZEOF_MPI_COUNT} = $sizeof_hash{LONG}
+            $config_defines{SIZEOF_MPI_OFFSET} = $sizeof_hash{LONG}
+        $else
+            $config_defines{SIZEOF_MPI_COUNT} = $sizeof_hash{LONG_LONG}
+            $config_defines{SIZEOF_MPI_OFFSET} = $sizeof_hash{LONG_LONG}
+
+        # Supported Fortran types
+        $(for:1,2,4,8)
+            $config_defines{MPI_INTEGER$1_SUPPORTED} = 1
+            $config_defines{MPI_LOGICAL$1_SUPPORTED} = 1
+        $config_defines{MPI_REAL4_SUPPORTED} = 1
+        $config_defines{MPI_REAL8_SUPPORTED} = 1
+        $config_defines{MPI_COMPLEX8_SUPPORTED} = 1
+        $config_defines{MPI_COMPLEX16_SUPPORTED} = 1
+        # optional types, as configure does: try to compile a declaration
+        $(for:LOGICAL16,INTEGER16,REAL2,REAL16,COMPLEX4,COMPLEX32 and logical*16,integer*16,real*2,real*16,complex*4,complex*32)
+            $if fc_has_type("$2")
+                $config_defines{MPI_$1_SUPPORTED} = 1
+
+        $config_defines{F77_TRUE_VALUE} = 1
+        $config_defines{F77_FALSE_VALUE} = 0
+        # f08 binding
+        $if $opts{f08}
+            $config_defines{HAVE_F08_BINDING} = 1
+
+        # MPIX support in fortran
+        $config_defines{MPI_MPIX} = 1
+
+        $config_defines{HAVE_MPI_F_INIT_WORKS_WITH_C} = 1
+        $config_defines{LT_OBJDIR} = '".libs/"'
+
+    subcode: patch_localdefs
+        $if -f "src/binding/fortran/localdefs.in"
+            my %confs
+            my @bindings
+            push @bindings, "f77"
+            push @bindings, "f90"
+            $if $opts{f08}
+                push @bindings, "f08"
+            $confs{fortran_bindings} = join(",", @bindings)
+            $confs{MPICH_COMPILER_F77} = "$opts{FC} $opts{FFLAGS}"
+            $confs{MPICH_COMPILER_FC} = "$opts{FC} $opts{FCFLAGS}"
+            autoconf_file("src/binding/fortran/localdefs", \%confs)
+
+    subcode: patch_mpi_fortran_h_in
+        $if -f "src/binding/fortran/mpif_h/mpi_fortran.h.in"
+            my %confs
+            $confs{MPI_FINT} = "int"
+            autoconf_file("src/binding/fortran/mpif_h/mpi_fortran.h", \%confs)
+
+#----------------------------------------
+subcode: make_fortran
+    my %conds
+    $conds{BUILD_F77_BINDING} = 1
+    $conds{BUILD_FC_BINDING} = 1
+    $conds{BUILD_F08_BINDING} = 1
+    # $conds{BUILD_LIBF77_PMPI} = 1
+    $conds{INSTALL_MPIF90} = 1
+    $conds{INSTALL_MPIF77} = 1
+
+    $autoconf_vars{MPIFCLIBNAME} = "mpifort"
+    $autoconf_vars{MPIFORT_NAME} = "mpifort"
+    $autoconf_vars{MPIF90_NAME} = "mpif90"
+    $autoconf_vars{MPIF77_NAME} = "mpif77"
+    $autoconf_vars{VISIBILITY_CFLAGS} = "-fvisibility=hidden"
+    $autoconf_vars{FCLIB_LDFLAGS} = ""
+    $autoconf_vars{ABIVERSIONFLAGS} = "-avoid-version"
+
+    $autoconf_vars{FCMODEXT} = "mod"
+    $autoconf_vars{FCINCFLAG} = "-I"
+    $autoconf_vars{FCMODOUTFLAG} = "-J"
+
+    $if $opts{"enable-mpi-abi"}
+        $autoconf_vars{mpi_libs} = "../../../lib/libmpi_abi.la"
+    $else
+        $autoconf_vars{mpi_libs} = "../../../lib/libmpi.la"
+
+    $make_vars{DEFAULT_INCLUDES} = "-I."
+    $make_vars{AM_CPPFLAGS} = "-fvisibility=hidden -Isrc/binding/fortran"
+    # mpi.h and mpix.h from the MPICH tree, matching mpi_libs
+    $make_vars{CPPFLAGS} = "-I../../include"
+    $make_vars{srcdir} = "src/binding/fortran"
+
+    load_automake("src/binding/fortran/Makefile.am", \%conds)
+    $call mod_add_extra_use_mpi
+    $call mod_add_extra_use_mpi_f08
+
+    my @modlist
+    $(for:a in mpi, mpi_constants, mpi_sizeofs, mpi_base, pmpi_base)
+        push @modlist, "use_mpi/$(a).mod"
+    $(for:a in mpi_f08, pmpi_f08, mpi_f08_types, mpi_f08_compile_constants, mpi_f08_link_constants, mpi_f08_callbacks, mpi_c_interface, mpi_c_interface_types, mpi_c_interface_glue, mpi_c_interface_nobuf, mpi_c_interface_cdesc)
+        push @modlist, "use_mpi/$(a).mod"
+    $make_vars{modinc_HEADERS} = join(' ', @modlist)
+
+    dump_makefile("src/binding/fortran/Makefile", "../../mymake")
+
+subcode: mod_add_extra_use_mpi
+    $(set:U=use_mpi)
+    push @extra_make_rules, "$(U)/mpi.lo: $(U)/mpi_constants.lo $(U)/mpi_sizeofs.lo $(U)/mpi_base.lo $(U)/pmpi_base.lo"
+    push @extra_make_rules, "$(U)/mpi_base.lo: $(U)/mpi_constants.lo", ""
+    push @extra_make_rules, "$(U)/pmpi_base.lo: $(U)/mpi_constants.lo", ""
+    push @extra_make_rules, "$(U)/mpi_sizeofs.lo: $(U)/mpifnoext.h", ""
+    push @extra_make_rules, "$(U)/mpi_constants.lo: $(U)/mpifnoext.h", ""
+    push @extra_make_rules, "$(U)/mpifnoext.h: mpif_h/mpif.h"
+    # remove EXTERNAL functions and MPI_WTIME/MPI_WTICK declarations
+    push @extra_make_rules, "\tsed -e 's/^C/!/g' -e '/EXTERNAL/d' -e '/PMPI_/d' \$< > \$@"
+    push @extra_make_rules, ""
+
+subcode: mod_add_extra_use_mpi_f08
+    $(set:U=use_mpi_f08)
+    push @extra_make_rules, "$(U)/mpi_c_interface.lo: $(U)/mpi_c_interface_nobuf.lo $(U)/mpi_c_interface_cdesc.lo", ""
+    push @extra_make_rules, "$(U)/mpi_c_interface_nobuf.lo: $(U)/mpi_c_interface_glue.lo", ""
+    push @extra_make_rules, "$(U)/mpi_c_interface_glue.lo: $(U)/mpi_f08.lo", ""
+
+    push @extra_make_rules, "$(U)/mpi_f08.lo: $(U)/pmpi_f08.lo", ""
+    push @extra_make_rules, "$(U)/pmpi_f08.lo: $(U)/mpi_f08_callbacks.lo $(U)/mpi_f08_link_constants.lo", ""
+    push @extra_make_rules, "$(U)/mpi_f08_callbacks.lo: $(U)/mpi_f08_compile_constants.lo", ""
+    push @extra_make_rules, "$(U)/mpi_f08_compile_constants.lo: $(U)/mpi_f08_types.lo", ""
+    push @extra_make_rules, "$(U)/mpi_f08_link_constants.lo: $(U)/mpi_f08_types.lo", ""
+    push @extra_make_rules, "$(U)/mpi_f08_types.lo: $(U)/mpi_c_interface_types.lo", ""
+    push @extra_make_rules, "$(U)/mpi_c_interface_cdesc.lo: $(U)/mpi_c_interface_types.lo $(U)/mpi_f08_link_constants.lo", ""
+    $call add_wrappers_f
+
+    subcode: add_wrappers_f
+        $(for:f_sync_reg_f08ts,f08ts)
+            push @extra_make_rules, "$(U)/wrappers_f/$1.lo: $(U)/mpi_f08.lo $(U)/mpi_c_interface.lo"
+            push @extra_make_rules, "$(U)/wrappers_f/p$1.lo: $(U)/mpi_f08.lo $(U)/mpi_c_interface.lo"
+
+
+fncode: fc_has_type($type)
+    &call open_w, mymake/t-fc.f
+        print Out "      program t\n      $type a\n      end\n"
+    system "$opts{FC} -c -o mymake/t-fc.o mymake/t-fc.f >/dev/null 2>&1"
+    my $ret = ($? == 0)
+    unlink "mymake/t-fc.f", "mymake/t-fc.o"
+    return $ret
