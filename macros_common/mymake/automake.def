@@ -64,13 +64,13 @@ fncode: load_automake($file, $cond_hash)
         my @lines
         my ($skip, @stack)
         &call open_r, $(file)
-            $if /^if\s+(\w+)/
+            $if /^if\s+(!?)(\w+)/
                 push @stack, $skip
                 $(if:showcond)
-                    $print if $1 ...
+                    $print if $1$2 ...
                 # set new skip if parent is not skipping
                 $if !$skip
-                    $skip = !$cond_hash->{$1}
+                    $skip = $1 ? ($cond_hash->{$2} ? 1 : 0) : ($cond_hash->{$2} ? 0 : 1)
                 next
             $elif /^else\b/
                 # only flip if the parent is not skipping
