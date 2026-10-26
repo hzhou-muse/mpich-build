@@ -45,6 +45,11 @@ fncode: dump_makefile($makefile, $moddir)
             $print "CUDA_GENCODE = $gencode"
         $elif $opts{"with-cuda"}
             $print "NVCC = $opts{'with-cuda'}/bin/nvcc"
+        my $hipcc = get_make_var("HIPCC")
+        $if $hipcc
+            my $hip_gencode = get_make_var("HIP_GENCODE")
+            $print "HIPCC = $hipcc"
+            $print "HIP_GENCODE = $hip_gencode"
         $print
         $map dump_variable, DEFS, DEFAULT_INCLUDES, INCLUDES, AM_CPPFLAGS, CPPFLAGS, AM_CFLAGS, CFLAGS, AM_LDFLAGS, LDFLAGS, LIBS
         $print
@@ -160,6 +165,10 @@ fncode: dump_makefile($makefile, $moddir)
                     $call quiet_rule, NVCC, src/backend/cuda/cudalt.sh \$\@ \x24(NVCC) \x24(AM_CPPFLAGS) \x24(CUDA_GENCODE) -c \$<
                 $else
                     $call quiet_rule, NVCC, $cudalt \$\@ nvcc -c \x24(AM_CPPFLAGS) \$<
+                $print
+            $if get_make_var("HIPCC")
+                $print "%.lo: %.hip"
+                $call quiet_rule, HIPCC, src/backend/hip/hiplt.sh \$\@ \x24(HIPCC) \x24(AM_CPPFLAGS) -g \x24(HIP_GENCODE) -c \$<
                 $print
             $if !$opts{disable_cxx}
                 $print "%.lo: %.cxx"

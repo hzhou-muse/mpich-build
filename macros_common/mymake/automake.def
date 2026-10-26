@@ -108,7 +108,7 @@ fncode: get_make_objects($p, $is_program)
         $t = "$p.c"
     my @tlist
     $foreach $a in  split /\s+/, $t
-        $if $a=~/(.*)\.(c|f|f90|cu|cxx)$/
+        $if $a=~/(.*)\.(c|f|f90|cu|hip|cxx)$/
             $if $is_program
                 push @tlist, "$1.o"
             $else

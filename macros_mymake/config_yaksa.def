@@ -2,16 +2,15 @@
 # yaksa_config.h, yaksa.h, localdefs and Makefile. The backends' pup sources
 # (genpup.py) are generated beforehand by the builder.
 #
-# Supported: the seq backend, plus cuda with opts with-cuda (and
-# with-cuda-sm, enable-cuda-p2p). hip and ze still go through configure.
+# Backends: seq, plus cuda (opts with-cuda, with-cuda-sm, enable-cuda-p2p),
+# hip (with-hip, with-hip-sm, enable-hip-p2p) and ze (with-ze, enable-ze-p2p,
+# enable-ze-native, enable-ze-revision-id), as configure's subcfg.m4 files.
 
 subcode: config_init_yaksa
     my $d = comp_dir("src/mpi/datatype/typerep/yaksa")
     $config_prefix = ""
     $config_in = "$mymake_dir/config_templates/yaksa_config.h"
     $config_out = "$d/src/frontend/include/yaksa_config.h"
-    $if $opts{"with-hip"} or $opts{"with-ze"}
-        die "yaksa quick mode: hip and ze are not supported (use configure)\n"
 
 subcode: config_yaksa
     my $d = comp_dir("src/mpi/datatype/typerep/yaksa")
@@ -42,7 +41,32 @@ subcode: config_yaksa
             $config_defines{HAVE_CUDA} = 1
             $config_defines{HAVE_LIBCUDART} = 1
 
+        $call set_hip_defines
+        $call set_ze_defines
         $call set_alignof
+
+    subcode: set_hip_defines
+        $if $opts{"with-hip"}
+            my $p = gpu_prefix($opts{"with-hip"})
+            $if $p and !-x "$p/bin/hipcc"
+                die "yaksa: HIP was requested but $p/bin/hipcc is not there\n"
+            $config_defines{HAVE_HIP} = 1
+            $config_defines{HAVE_LIBAMDHIP64} = 1
+            $if hip_uses_memorytype($p)
+                $config_defines{HIP_USE_MEMORYTYPE} = 1
+
+    subcode: set_ze_defines
+        $if $opts{"with-ze"}
+            $if system("command -v ocloc >/dev/null 2>&1") != 0
+                die "yaksa: ocloc not found; either install it or drop --with-ze\n"
+            $config_defines{HAVE_ZE} = 1
+            $config_defines{HAVE_LIBZE_LOADER} = 1
+            $config_defines{ZE_P2P} = yaksa_p2p("ze")
+        $if $opts{"enable-ze-native"} and $opts{"enable-ze-native"} ne "no"
+            $if !$opts{"with-ze"}
+                die "yaksa: --enable-ze-native needs --with-ze\n"
+            ze_native_probe()
+            $config_defines{ZE_NATIVE} = 1
 
     # ALIGNOF_<type> for the types in the template ('byte' isn't a type: 0)
     subcode: set_alignof
@@ -61,13 +85,18 @@ subcode: config_yaksa
     # what configure.ac assembles from the backends' autogen_info files
     subcode: write_localdefs
         my @info
-        $foreach $b in "seq", "cuda"
-            $if $b eq "cuda" and !$opts{"with-cuda"}
+        $foreach $b in "seq", "cuda", "ze", "hip"
+            $if $b ne "seq" and !$opts{"with-$b"}
                 next
             my ($depth, $autogen_info) = (undef, "$d/src/backend/$b/autogen_info")
             &call open_r, $autogen_info
                 $if /^${b}_pup_max_nesting=(\d+)/
                     $depth = $1
+            # configure names a native ze backend ze(<device>), which has no
+            # autogen_info of its own: no depth
+            $if $b eq "ze" and $opts{"enable-ze-native"} and $opts{"enable-ze-native"} ne "no"
+                push @info, "ze($opts{'enable-ze-native'})"
+                next
             push @info, $depth ? "$b(depth=$depth)" : $b
         my $localdefs = "$d/localdefs"
         &call open_w, $localdefs
@@ -98,6 +127,46 @@ fncode: yaksa_numversion($v)
     $else
         $ext = $e{$ext}
     return $maj * 10000000 + $min * 100000 + $rev * 1000 + $ext * 100 + $num
+
+# --with-<gpu> is a prefix, or just a flag (yes, 1): no prefix
+fncode: gpu_prefix($v)
+    $if $v eq "1" or $v eq "yes"
+        return ""
+    return $v
+
+# struct hipPointerAttribute_t.memoryType exists before ROCm 6.0
+fncode: hip_uses_memorytype($prefix)
+    my ($src, $obj) = (probe_path("hipmember.c"), probe_path("hipmember.o"))
+    &call open_w, $src
+        print Out "#include <hip/hip_runtime_api.h>\n"
+        print Out "int main(){ return (int) sizeof(((struct hipPointerAttribute_t *) 0)->memoryType); }\n"
+    my $inc = $prefix ? "-I$prefix/include" : ""
+    system "$opts{CC} -D__HIP_PLATFORM_AMD__ $inc -c -o $obj $src >/dev/null 2>&1"
+    return $? == 0
+
+# ocloc must handle the native device; returns 1 when it makes a multi-device
+# archive (conftest.ar), as configure checks
+fncode: ze_native_probe
+    my $device = $opts{"enable-ze-native"}
+    my $extra = ze_ocloc_options()
+    my $dir = probe_path("ocloc")
+    system "mkdir -p $dir"
+    my $cl = "$dir/conftest.cl"
+    &call open_w, $cl
+        print Out "__kernel void foo(int x) {}\n"
+    my $rc = system("cd $dir && ocloc compile -file conftest.cl -device $device $extra -options \"-cl-std=CL2.0\" >/dev/null 2>&1")
+    my $multi = (-f "$dir/conftest.ar") ? 1 : 0
+    system "rm -rf $dir"
+    system "rmdir mymake/probe 2>/dev/null"
+    $if $rc != 0
+        die "yaksa: ocloc compiler is not compatible with --enable-ze-native=$device\n"
+    return $multi
+
+fncode: ze_ocloc_options
+    my $id = $opts{"enable-ze-revision-id"}
+    $if defined $id and $id ne "-1" and $id ne ""
+        return "-revision_id $id"
+    return ""
 
 # --enable-<backend>-p2p={yes|no|cliques}
 fncode: yaksa_p2p($backend)
@@ -153,19 +222,79 @@ subcode: make_yaksa
             $conds{HAVE_C11_ATOMICS} = 1
     $make_vars{DEFAULT_INCLUDES} = "-I. -Isrc/frontend/include"
     $make_vars{CFLAGS} = "-std=c11 -fvisibility=hidden $opts{cflags}"
-    $make_vars{LIBS} = "-lpthread"
+    my (@libs, $stdcxx)
     $if $opts{"with-cuda"}
         my $p = $opts{"with-cuda"}
         $conds{BUILD_CUDA_BACKEND} = 1
         $conds{BUILD_CUDA_TESTS} = 1
-        $make_vars{LIBS} = "-lcudart -lpthread -lstdc++"
+        push @libs, "-lcudart"
+        $stdcxx = 1
         my $cc = $opts{CC}
         $cc =~ s/\s+-std=\S+//
         $make_vars{NVCC} = "$p/bin/nvcc -ccbin $cc"
         $make_vars{CUDA_GENCODE} = cuda_gencode($p, $opts{"with-cuda-sm"} || "auto")
+    $if $opts{"with-hip"}
+        my $p = gpu_prefix($opts{"with-hip"})
+        $conds{BUILD_HIP_BACKEND} = 1
+        push @libs, "-lamdhip64"
+        $stdcxx = 1
+        add_make_vars("CPPFLAGS", "-D__HIP_PLATFORM_AMD__")
+        $make_vars{HIPCC} = $p ? "$p/bin/hipcc" : "hipcc"
+        $make_vars{HIP_GENCODE} = hip_gencode($opts{"with-hip-sm"} || "auto")
+    $if $opts{"with-ze"}
+        my $p = gpu_prefix($opts{"with-ze"})
+        $conds{BUILD_ZE_BACKEND} = 1
+        $conds{BUILD_ZE_TESTS} = 1
+        push @libs, "-lze_loader"
+        $if $p
+            add_make_vars("CPPFLAGS", "-I$p/include")
+            add_make_vars("LDFLAGS", "-L$p/lib64 -L$p/lib")
+        $call ze_native_make
+    $make_vars{LIBS} = join(" ", @libs, "-lpthread", $stdcxx ? "-lstdc++" : ())
     load_automake("$d/Makefile.am", \%conds)
     @programs=()
     dump_makefile("$d/Makefile")
+
+# ze: how the OpenCL kernels become the .c files that embed them (ocloc),
+# as src/backend/ze/pup/Makefile.mk: native, native for several devices, or
+# SPIR-V
+subcode: ze_native_make
+    my $native = $opts{"enable-ze-native"}
+    $autoconf_vars{enable_ze_native} = $native || "no"
+    $autoconf_vars{extra_ocloc_options} = ze_ocloc_options()
+    my $multi = 0
+    $if $native and $native ne "no"
+        $multi = ze_native_probe()
+        $if $multi
+            $conds{BUILD_ZE_NATIVE_MULTIPLE} = 1
+        $else
+            $conds{BUILD_ZE_NATIVE} = 1
+    my $inc = "-I ./src/backend/ze/include -cl-std=CL2.0"
+    my $extra = ze_ocloc_options()
+    my @rule
+    $if $native and $native ne "no" and !$multi
+        @rule = ("\t\@echo \"  OCLOC (native)  \x24<\" ; \\",
+            "\tocloc compile -file \x24< -device $native -out_dir `dirname \x24\@` -output_no_suffix -q -options \"$inc\" $extra && \\",
+            "\t(test -f \x24(\@:.c=) && mv \x24(\@:.c=) \x24(\@:.c=.bin) || true) && /bin/rm -f \x24(\@:.c=.gen) && \\",
+            "\t./src/backend/ze/pup/inline.py \x24(\@:.c=.bin) \x24\@ . 1")
+    $elif $multi
+        @rule = ("\t\@echo \"  OCLOC (multiple native)  \x24<\" ; \\",
+            "\tocloc compile -file \x24< -device $native -q -options \"$inc\" $extra && \\",
+            "\tmv `basename \x24(\@:.c=.ar)` `dirname \x24\@` && \\",
+            "\t./src/backend/ze/pup/inline.py \x24(\@:.c=.ar) \x24\@ . 2")
+    $else
+        @rule = ("\t\@echo \" OCLOC (spirv)  \x24<\"; \\",
+            "\tocloc compile -file \x24< -device skl -spv_only -out_dir `dirname \x24\@` -output_no_suffix -q -options \"$inc\" && \\",
+            "\t/bin/rm -f \x24(\@:.c=.gen) && \\",
+            "\t./src/backend/ze/pup/inline.py \x24(\@:.c=.spv) \x24\@ . 0")
+    $global @extra_make_rules
+    push @extra_make_rules, "%.c: %.cl", @rule, ""
+
+# configure's --with-hip-sm: auto (hipcc decides) or target ids
+fncode: hip_gencode($spec)
+    $if $spec eq "auto"
+        return ""
+    return join(" ", map { "--offload-arch=$_" } split(/,/, $spec))
 
 # configure's --with-cuda-sm: auto (the visible GPUs, else all-major),
 # all-major, a comma-separated list of numbers
