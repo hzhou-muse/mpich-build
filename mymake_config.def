@@ -17,6 +17,7 @@ include: macros_mymake/config_test.def
 include: macros_mymake/config_romio.def
 include: macros_mymake/config_mpi_h.def
 include: macros_mymake/config_yaksa.def
+include: macros_mymake/config_hwloc.def
 
 # Goal: skip autoconf and produce mpichconf.h
 # Input:        %opts
@@ -26,7 +27,7 @@ include: macros_mymake/config_yaksa.def
 output_dir: ./mymake
 
 macros:
-    config_cases: mpich, mpl, pmi, opa, hydra, fortran, test, dtpools, romio, mpi_h, yaksa
+    config_cases: mpich, mpl, pmi, opa, hydra, fortran, test, dtpools, romio, mpi_h, yaksa, hwloc
     # showcond: 1
     # showload: 1
 

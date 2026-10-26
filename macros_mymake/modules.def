@@ -53,12 +53,17 @@ subcode: recipe_libtool
     run("autoconf")
     run("./configure --disable-static")
 
+# no autogen and configure (see config_hwloc.def); only the autoheader template
+# of the private config header is made with autotools
 subcode: recipe_hwloc
-    run("sh autogen.sh")
-    my $t = "--enable-embedded-mode --enable-visibility=no --disable-libxml2"
-    $t .= " --disable-nvml --disable-cuda --disable-opencl --disable-rsmi"
-    run("CFLAGS=-fvisibility=hidden ./configure $t $extra")
-    run("make -j$opts{jobs}")
+    run("mkdir -p mymake && rm -f libtool && ln -s ../libtool/libtool libtool")
+    run("aclocal -I config && autoheader")
+    run("rm -rf autom4te.cache aclocal.m4")
+    my $args = "--enable-embedded-mode --enable-visibility=no --disable-libxml2 --disable-nvml --disable-cuda --disable-opencl --disable-rsmi CFLAGS=-fvisibility=hidden"
+    mymake_inputs(".", "hwloc", {srcdir => ".", config_in => "include/private/autogen/config.h.in"}, "$args $extra")
+    run("perl $mymake_dir/mymake_config.pl hwloc")
+    run("perl $mymake_dir/mymake_makefile.pl hwloc")
+    run("make -C hwloc -j$opts{jobs}")
 
 # no autogen and configure (see config_yaksa.def)
 subcode: recipe_yaksa

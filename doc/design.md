@@ -176,7 +176,8 @@ perl <mpich-build>/mymake/mymake_modules.pl --rebuild=<component> [component opt
   |---|---|---|
   | mpl, pmi, romio | in-tree | quick (mymake's existing `config_*` code) |
   | yaksa | in-tree | quick: run `genpup.py`, write `yaksa_config.h` (template `yaksa_config.h.in`), `yaksa.h` and `localdefs`, and the Makefile from `Makefile.am`; seq, cuda, hip and ze backends |
-  | hwloc, libfabric, ucx | submodules | autotools at first, quick later where it pays off |
+  | hwloc | submodule | quick: `autoheader` for the private config header template, then the config headers, `static-components.h` and the Makefile of `hwloc/` (Linux, embedded, no optional components) |
+  | libfabric, ucx | submodules | autotools at first, quick later where it pays off |
   | libtool, mydef_boot | as today | as today |
 
 - **Customization is a single-component rebuild.** Anything beyond the preset

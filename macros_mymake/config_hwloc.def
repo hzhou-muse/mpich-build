@@ -1,0 +1,145 @@
+# hwloc, embedded and built on its own (as a module) without autogen and
+# configure: the two config headers, hwloc/static-components.h and the
+# Makefile of hwloc/. Linux only, with no optional components (libxml2, pci,
+# cuda, ...), as the module recipe configures it (--enable-embedded-mode
+# --enable-visibility=no --disable-libxml2 --disable-nvml --disable-cuda
+# --disable-opencl --disable-rsmi). The private header's template is
+# include/private/autogen/config.h.in, which the builder makes with
+# autoheader from the pinned hwloc sources (opts config_in).
+
+subcode: config_init_hwloc
+    my $d = comp_dir("modules/hwloc")
+    $config_prefix = ""
+    $config_in = $opts{config_in} || "$d/include/private/autogen/config.h.in"
+    $config_out = "$d/include/private/autogen/config.h"
+    $if $opts{uname} and $opts{uname}!~/Linux/i
+        die "hwloc quick mode: Linux only\n"
+
+subcode: config_hwloc
+    my $d = comp_dir("modules/hwloc")
+    my $hversion = hwloc_version("$d/VERSION")
+    my $arch = `uname -m`
+    chomp $arch
+    $call ac_init, hwloc, $hversion, https://github.com/open-mpi/hwloc/issues, hwloc, -
+    $call set_config_defines
+    $call write_public_header
+    $call write_static_components
+
+    subcode: set_config_defines
+        $call AC_USE_SYSTEM_EXTENSIONS
+        # autoconf 2.70's list, which the generic macro lacks
+        $(for:a in _DARWIN_C_SOURCE,_HPUX_ALT_XOPEN_SOCKET_API,_HPUX_SOURCE,_NETBSD_SOURCE,_OPENBSD_SOURCE,__STDC_WANT_IEC_60559_ATTRIBS_EXT__,__STDC_WANT_IEC_60559_BFP_EXT__,__STDC_WANT_IEC_60559_DFP_EXT__,__STDC_WANT_IEC_60559_FUNCS_EXT__,__STDC_WANT_IEC_60559_TYPES_EXT__,__STDC_WANT_LIB_EXT2__,__STDC_WANT_MATH_SPEC_FUNCS__)
+            $config_defines{$(a)} = 1
+        $config_defines{X_DISPLAY_MISSING} = 1
+
+        # configure doesn't look for these (the generic probes would find them)
+        $(for:a in HAVE_LANGINFO_H,HAVE_LOCALE_H,HAVE_SYS_PARAM_H,HAVE_TIME_H,HAVE_MKSTEMP)
+            $config_defines{$(a)} = undef
+
+        # glibc: which functions the system headers declare
+        $(for:a in FABSF,MODFF,PTHREAD_GETAFFINITY_NP,PTHREAD_SETAFFINITY_NP,SCHED_GETCPU,SNPRINTF,STRTOULL,_SC_NPROCESSORS_CONF,_SC_NPROCESSORS_ONLN,_SC_PAGESIZE,_SC_PAGE_SIZE)
+            $config_defines{HAVE_DECL_$(a)} = 1
+        $(for:a in GETEXECNAME,GETPROGNAME,RUNNING_ON_VALGRIND,_PUTENV,_SC_LARGE_PAGESIZE,_SC_NPROC_CONF,_SC_NPROC_ONLN,_STRDUP)
+            $config_defines{HAVE_DECL_$(a)} = 0
+        $(for:a in FFS,FFSL,GETPAGESIZE,MEMALIGN,OPENAT,POSIX_MEMALIGN,PROGRAM_INVOCATION_NAME,PTHREAD_T,SETLOCALE,SSIZE_T,STRCASECMP,STRFTIME,STRNCASECMP,UNAME,__PROGNAME)
+            $config_defines{HAVE_$(a)} = 1
+
+        $(for:a in CORRECT_SNPRINTF,CPU_SET,CPU_SET_S,DECL_FFS,DECL_FFSL,DECL_STRCASECMP,DECL_STRNCASECMP,FFS,FFSL,LINUXIO,LINUXPCI,PTHREAD_MUTEX,SCHED_SETAFFINITY,STDINT_H,SYSCALL)
+            $config_defines{HWLOC_HAVE_$(a)} = 1
+        $(for:a in ALIGNED,ALWAYS_INLINE,COLD,CONST,CONSTRUCTOR,DEPRECATED,FORMAT,HOT,MALLOC,MAY_ALIAS,NONNULL,NORETURN,NO_INSTRUMENT_FUNCTION,PACKED,PURE,SENTINEL,UNUSED,WARN_UNUSED_RESULT,WEAK_ALIAS)
+            $config_defines{HWLOC_HAVE_ATTRIBUTE_$(a)} = 1
+        $config_defines{HWLOC_HAVE_ATTRIBUTE} = ""
+        $config_defines{HWLOC_C_HAVE_VISIBILITY} = 0
+        $config_defines{HWLOC_LINUX_SYS} = 1
+        $config_defines{HWLOC_SYM_TRANSFORM} = 0
+        $config_defines{HWLOC_SYM_PREFIX} = "hwloc_"
+        $config_defines{HWLOC_SYM_PREFIX_CAPS} = "HWLOC_"
+        $config_defines{hwloc_pid_t} = "pid_t"
+        $config_defines{hwloc_thread_t} = "pthread_t"
+        $if $arch eq "x86_64"
+            $config_defines{HWLOC_X86_64_ARCH} = 1
+            $config_defines{HWLOC_HAVE_X86_CPUID} = 1
+        $elif $arch=~/^i.86$/
+            $config_defines{HWLOC_X86_32_ARCH} = 1
+            $config_defines{HWLOC_HAVE_X86_CPUID} = 1
+
+        # version, as VERSION (major.minor.release+greek, or snapshot_version)
+        $config_defines{HWLOC_VERSION} = "\"$hversion\""
+        my %v = hwloc_version_fields("$d/VERSION")
+        $config_defines{HWLOC_VERSION_MAJOR} = $v{major}
+        $config_defines{HWLOC_VERSION_MINOR} = $v{minor}
+        $config_defines{HWLOC_VERSION_RELEASE} = $v{release}
+        $config_defines{HWLOC_VERSION_GREEK} = "\"$v{greek}\""
+
+    # include/hwloc/autogen/config.h: same #undef template style, but the
+    # lines inside #if blocks are indented
+    subcode: write_public_header
+        hwloc_dump_template("$d/include/hwloc/autogen/config.h.in", "$d/include/hwloc/autogen/config.h")
+
+    # the components compiled in (configure collects them from the
+    # component m4 files); no plugins, none of the optional ones
+    subcode: write_static_components
+        my @components = qw(noos xml synthetic xml_nolibxml linux)
+        $if $arch=~/^(x86_64|i.86)$/
+            push @components, "x86"
+        my $static_components = "$d/hwloc/static-components.h"
+        &call open_w, $static_components
+            print Out "#include <private/internal-components.h>\n"
+            print Out "static const struct hwloc_component * hwloc_static_components[] = {\n"
+            $foreach $c in @components
+                print Out "  &hwloc_${c}_component,\n"
+            print Out "  NULL\n};\n"
+
+# the VERSION file: shell-style name=value lines
+fncode: hwloc_version_fields($file)
+    my %v
+    &call open_r, $file
+        $if /^(\w+)=(.*)/
+            my ($k, $val) = ($1, $2)
+            $val =~ s/^"(.*)"$/$1/
+            $val =~ s/\$\{(\w+)\}/$v{$1}/g
+            $v{$k} = $val
+    return %v
+
+fncode: hwloc_version($file)
+    my %v = hwloc_version_fields($file)
+    $if $v{snapshot}
+        return $v{snapshot_version}
+    return "$v{major}.$v{minor}.$v{release}$v{greek}"
+
+fncode: hwloc_dump_template($in, $out)
+    $global %config_defines
+    my @lines
+    &call open_r, $in
+        $if /^(\s*#\s*)undef\s+(\w+)\s*$/
+            my ($lead, $name) = ($1, $2)
+            $if defined $config_defines{$name}
+                my $val = $config_defines{$name}
+                push @lines, "${lead}define $name" . ($val ne "" ? " $val" : "") . "\n"
+            $else
+                push @lines, "\x2f* #undef $name */\n"
+        $else
+            push @lines, $_
+    &call open_W, $out
+        $foreach $l in @lines
+            print Out $l
+
+#----------------------------------------
+subcode: make_hwloc
+    my $d = comp_dir("modules/hwloc")
+    my %conds
+    $conds{HWLOC_HAVE_LINUX} = 1
+    my $arch = `uname -m`
+    chomp $arch
+    $if $arch=~/^(x86_64|i.86)$/
+        $conds{HWLOC_HAVE_X86_CPUID} = 1
+    # Makefile is in hwloc/: the libtool script and the includes are one up
+    $make_vars{LIBTOOL} = "../libtool"
+    $make_vars{DEFAULT_INCLUDES} = "-I. -I../include/private/autogen -I../include/hwloc/autogen"
+    $make_vars{HWLOC_CPPFLAGS} = "-I../include"
+    $make_vars{HWLOC_PLUGINS_PATH} = "\x24(PREFIX)/lib/hwloc"
+    $make_vars{HWLOC_runstatedir} = ""
+    $make_vars{LIBS} = "-lm"
+    load_automake("$d/hwloc/Makefile.am", \%conds)
+    @programs=()
+    dump_makefile("$d/hwloc/Makefile")

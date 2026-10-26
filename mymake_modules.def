@@ -149,7 +149,7 @@ subcode: build_components
 # what a build of $c is up to date with; `recipe` changes when the way a
 # component is built changes (yaksa: configured by mymake, no autotools)
 fncode: built_key($c)
-    my %recipe = (yaksa => "quick")
+    my %recipe = (yaksa => "quick", hwloc => "quick")
     my $key = "source: $src_key{$c}\noptions: $comp_opts{$c}\n"
     $if $recipe{$c}
         $key .= "recipe: $recipe{$c}\n"

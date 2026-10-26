@@ -1,10 +1,12 @@
 subcode: load_maint_version
     $global $version
     my $version_m4 = $opts{version_m4} || "maint/version.m4"
-    &call open_r, $version_m4
-        $if /m4_define\(\[MPICH_VERSION_m4\],\[(.*)\]/
-            $version = $1
-            last
+    # components with their own version (hwloc) have none
+    $if -f $version_m4
+        &call open_r, $version_m4
+            $if /m4_define\(\[MPICH_VERSION_m4\],\[(.*)\]/
+                $version = $1
+                last
 
 subcode: patch_mpicc_etc
     my %confs
