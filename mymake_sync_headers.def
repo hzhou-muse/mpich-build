@@ -5,9 +5,7 @@ output_dir: ./mymake
 page: mymake_sync_headers
     module: perl
 
-    my $mpich_repo = "$ENV{HOME}/work/mpich-github"
-    $if !-d $mpich_repo
-        die "MPICH repo not found at $mpich_repo\n"
+    $call find_mpich_repo
 
     # clone main branch into a temporary working copy
     my $mpich_dir = "$pwd/mpich-checkout"
@@ -104,6 +102,21 @@ page: mymake_sync_headers
     # clean up
     system "rm -rf $mpich_dir"
     print "\nDone.\n"
+
+subcode: find_mpich_repo
+    # $MPICH_GITHUB if set, else the first of the usual locations
+    my $mpich_repo = $ENV{MPICH_GITHUB}
+    $if $mpich_repo
+        $if !-e "$mpich_repo/.git"
+            die "MPICH_GITHUB=$mpich_repo is not a git repository\n"
+    $else
+        $foreach $d in "$ENV{HOME}/mpich-github", "$ENV{HOME}/work/mpich-github", "$ENV{HOME}/projects/mpich-github"
+            $if -e "$d/.git"
+                $mpich_repo = $d
+                last
+        $if !$mpich_repo
+            die "MPICH repo not found: set MPICH_GITHUB, or clone it to ~/mpich-github, ~/work/mpich-github or ~/projects/mpich-github\n"
+    print "MPICH repo: $mpich_repo\n"
 
 subcode: create_stubs
     # version.m4 - needed by romio, hydra, test/mpi, fortran

@@ -34,7 +34,7 @@ for f in mymake mymake_config mymake_ld mymake_libtool mymake_test mymake_log my
 done
 
 # quick mode needs the autoheader templates, generated once from a local MPICH
-# repository at ~/work/mpich-github (see doc/usage.md)
+# repository ($MPICH_GITHUB or ~/mpich-github; see doc/usage.md)
 perl mymake/mymake_sync_headers.pl
 
 # in an MPICH checkout
@@ -81,7 +81,7 @@ component with different options.
 - Quick mode generates only f77 test Makefiles, and its f77 testlist leaves out
   the spawn, io, rma and profile directories. Use slow mode for those.
 - A modules tarball is meant for the host that built it.
-- The template generator expects a local MPICH repository at
-  `~/work/mpich-github`.
+- The template generator needs a local MPICH repository: `$MPICH_GITHUB`, or
+  `~/mpich-github`, `~/work/mpich-github` or `~/projects/mpich-github`.
 
 See [doc/design.md](doc/design.md) for how it works and for open questions.

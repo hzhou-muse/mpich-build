@@ -2,7 +2,8 @@
 
 Paths below use `<mpich-build>` for this repository. Build in an MPICH
 checkout of your choice; the config templates come from a separate local MPICH
-repository at `~/work/mpich-github` (its `main` branch).
+repository (its `main` branch): `$MPICH_GITHUB`, or else the first of
+`~/mpich-github`, `~/work/mpich-github` and `~/projects/mpich-github`.
 
 ## Prerequisites
 
@@ -34,13 +35,15 @@ files are shared between pages, so recompiling all of them is simplest.
 ### 2. Generate the config templates (quick mode)
 
 ```sh
-git -C ~/work/mpich-github fetch origin main:main   # the script clones the local main
+git -C <mpich repo> fetch origin main:main   # the script clones the local main
 cd <scratch dir>                           # it clones into ./mpich-checkout
 perl <mpich-build>/mymake/mymake_sync_headers.pl
 cat <mpich-build>/mymake/config_templates/STAMP
 ```
 
-The repository path `~/work/mpich-github` is fixed in the script for now.
+The script takes the MPICH repository from `MPICH_GITHUB`; if that is unset it
+uses the first of `~/mpich-github`, `~/work/mpich-github` and
+`~/projects/mpich-github` that exists, and stops if there is none.
 Expect 10 templates (it fetches the hwloc submodule for `hwloc_config.h`, so it
 needs network). Re-run it when quick mode trips over a configure change in
 MPICH, or when a build says a template is stale.
