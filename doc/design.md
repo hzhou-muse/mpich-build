@@ -115,9 +115,9 @@ as follows:
 2. Otherwise unpack a modules tarball into the checkout's `mymake/` and use
    that. The tarball is `$MODTARBALL` if set, else
    `../mpich-modules/modules-<variant>.tar.gz` next to the checkout, where
-   `<variant>` is `gpu` with `--with-cuda` and `cpu` otherwise. (Today: a
-   `modules.tar.gz` in the checkout, or `$MODTARBALL` with an automatic
-   `-gpu`/`-hip` file name; the `../mpich-modules` default comes with step 1.)
+   `<variant>` is `gpu` with `--with-cuda`, `hip` with `--with-hip`, and `cpu`
+   otherwise. A tree already unpacked in the checkout's `mymake/` is reused,
+   and `modules.tar.gz` in the checkout is also looked for (see usage.md).
 
 The Makefile keeps rules to build each component in the tree, so make only
 rebuilds what changed. Unpacking per checkout (the default) keeps checkouts
@@ -136,7 +136,7 @@ tarballs keep working.
   breaks a build; the answer is to make rebuilds cheap, and to detect drift
   cheaply.
 
-### mymake_modules.pl (planned)
+### mymake_modules.pl
 
 `mymake_modules.pl` builds modules trees and tarballs, using quick mode where
 it can.
@@ -174,10 +174,11 @@ perl <mpich-build>/mymake/mymake_modules.pl --rebuild=<component> [component opt
 
   | Component | Source | Method |
   |---|---|---|
-  | mpl, pmi, romio | in-tree | quick (mymake's existing `config_*` code) |
+  | mpl, pmi, romio | in-tree | quick (mymake's existing `config_*` code), each in its own directory |
   | yaksa | in-tree | quick: run `genpup.py`, write `yaksa_config.h` (template `yaksa_config.h.in`), `yaksa.h` and `localdefs`, and the Makefile from `Makefile.am`; seq, cuda, hip and ze backends |
   | hwloc | submodule | quick: the config headers (template `hwloc_config.h`), `static-components.h` and the Makefile of `hwloc/` (Linux, embedded, no optional components) |
-  | libfabric, ucx | submodules | autotools at first, quick later where it pays off |
+  | libfabric, ucx | submodules | autotools (quick mode may follow where it pays off) |
+  | mpi_h | in-tree | quick: the generated `mpi.h` and friends, for romio |
   | libtool, mydef_boot | as today | as today |
 
 - **Customization is a single-component rebuild.** Anything beyond the preset
@@ -204,16 +205,13 @@ perl <mpich-build>/mymake/mymake_modules.pl --rebuild=<component> [component opt
   It also warns when the build's options don't match the variant's (e.g.
   `--with-cuda` with a cpu tarball).
 
-### Steps
+### Status
 
-1. mpl, pmi and romio into the modules tree, built with the existing quick
-   code; the STAMP with tree hashes; rebuild-on-mismatch; the MODDIR /
-   MODTARBALL / `../mpich-modules` lookup.
-2. Quick mode for yaksa.
-3. hwloc, libfabric and ucx through the same builder (autotools), replacing
-   the scripts of the old hzhou/mpich-modules repository, which is then
-   retired.
-4. Optionally, quick mode for hwloc and libfabric (and ucx).
+Done: mpl, mpi_h, pmi, romio, yaksa (seq, cuda, hip, ze) and hwloc build in
+quick mode; the STAMP, the lookup and the rebuild on drift; the builder
+reproduces what the old hzhou/mpich-modules scripts built, which is retired.
+Yaksa's hip and ze support is ported from configure but untested on hardware.
+Open: quick mode for libfabric and ucx (optional).
 
 ## Decisions
 
@@ -230,13 +228,12 @@ perl <mpich-build>/mymake/mymake_modules.pl --rebuild=<component> [component opt
   Further customization means rebuilding individual components on top of an
   existing variant tarball.
 - `mymake_modules.pl` writes to `mpich-modules/` next to the checkout by
-  default. The old hzhou/mpich-modules repository will be retired, which
-  frees the name.
+  default (the name of the retired hzhou/mpich-modules repository).
 
 ## Open questions
 
-- Which variants to preset: `cpu` and `gpu` (CUDA) for sure; hip and ze only
-  when detected? Debug builds of the whole set as a variant, or only through
+- Which variants to preset: `cpu`, `gpu` (CUDA) and `hip` exist; a `ze` variant
+  (libfabric, ucx and mpl options for ze) does not yet. Debug builds of the whole set as a variant, or only through
   single-component rebuilds?
 - Should a customized checkout tree be packable as its own tarball, or stay
   checkout-local?

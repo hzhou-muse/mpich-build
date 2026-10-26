@@ -41,22 +41,48 @@ cat <mpich-build>/mymake/config_templates/STAMP
 ```
 
 The repository path `~/work/mpich-github` is fixed in the script for now.
-Expect 8 templates. Re-run it when quick mode trips over a configure change in MPICH.
+Expect 10 templates (it fetches the hwloc submodule for `hwloc_config.h`, so it
+needs network). Re-run it when quick mode trips over a configure change in
+MPICH, or when a build says a template is stale.
 
 ### 3. Get a modules tarball
 
-Build one on the host that will use it; the build scripts are in
-hzhou/mpich-modules for now (`build_all.sh`, or the per-module
-`build_*.sh` and `build_tarball.sh`). Then point mymake at it:
+The modules (libtool, hwloc, yaksa, libfabric, ucx, mydef_boot, and the quick
+builds of mpl, mpi_h, pmi and romio) are built once per host and variant, from
+an MPICH checkout, at the commits that checkout records:
 
 ```sh
-export MODTARBALL=/path/to/modules.tar.gz
+cd <MPICH checkout>
+perl <mpich-build>/mymake/mymake_modules.pl --name=cpu     # or gpu (CUDA), hip
 ```
 
-For `--with-cuda`, put `modules-gpu.tar.gz` (built with `--with-cuda`) next
-to `modules.tar.gz`; mymake switches to it automatically. Alternatively,
-copy a tarball into the MPICH checkout as `modules.tar.gz`, or set
-`MODDIR` to an unpacked one.
+It writes `../mpich-modules/modules-<variant>.tar.gz` next to the checkout,
+keeping the build trees in `../mpich-modules/<variant>/` so a rerun only
+redoes what changed (no-op rerun: seconds; gpu from scratch: a few minutes,
+ucx is the slowest). Options: `--mpich=<checkout>`, `--out=<dir>`, `-j=N`,
+`--only=a,b` (rebuild just these), `--force`. The `gpu` variant needs `nvcc` on
+`PATH` (or `/usr/local/cuda`), `hip` needs ROCm in `/opt/rocm`.
+
+A checkout finds its modules in this order: `$MODDIR` (an unpacked tree, used
+in place), the tree already unpacked in the checkout's `mymake/`,
+`$MODTARBALL`, `modules.tar.gz` in the checkout, then
+`../mpich-modules/modules-<variant>.tar.gz` (variant `gpu` with `--with-cuda`,
+`hip` with `--with-hip`, else `cpu`). A `modules[-<name>].tar.gz` that is given
+is swapped for `modules-<variant>.tar.gz` next to it when that exists.
+
+Each tarball carries a `modules.stamp` (variant, MPICH commit, compilers, and a
+key per component). On every configure mymake compares it with the checkout:
+it warns when the variant or a submodule commit differs, and rebuilds an
+in-tree component (yaksa, mpl, mpi_h, pmi, romio) that differs, in the
+checkout's own copy (seconds; yaksa about 30 s). To change a component's
+options, rebuild it in the checkout:
+
+```sh
+perl <mpich-build>/mymake/mymake_modules.pl --rebuild=yaksa CFLAGS=-O1
+```
+
+(`CFLAGS=` replaces the default `-g -O2`; other arguments are configure
+options.)
 
 ## Quick build
 
@@ -133,16 +159,17 @@ make bcasttest && mpirun -n 4 ./bcasttest
 
 | Variable | Meaning |
 |---|---|
-| `MODTARBALL` | Path of the modules tarball |
-| `MODDIR` | Use this unpacked modules tree instead of a tarball |
+| `MODTARBALL` | Path of the modules tarball (default `../mpich-modules/modules-<variant>.tar.gz`) |
+| `MODDIR` | Use this unpacked modules tree instead of a tarball (not rebuilt on drift) |
 | `CC`, `CXX`, `FC` | Compilers (default gcc, g++, gfortran) |
 
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
-| `moddir not set` | No modules tarball found: set `MODTARBALL`. |
+| `no modules tarball` | None of the places above has one: run `mymake_modules.pl`, or set `MODTARBALL`. |
 | `undefined reference to __isoc23_*`, missing `crtbeginS.o` | The tarball was built on a different host; build one here. |
+| CUDA MPICH linked against CPU modules | Variant mismatch (a warning is printed): use the `gpu` tarball. |
 | Unexpanded `PAC_*` macros in a configure script (slow mode) | confdb wasn't copied into that subdirectory. |
 | `make: Nothing to be done for 'test'` | Slow mode: use `make testing`. |
 | `No rule to make target 'fortran'` | Slow mode: use `make mpifort`. |

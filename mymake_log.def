@@ -2,8 +2,7 @@ output_dir: ./mymake
 
 page: mymake_log
     module: perl
-    # arg: /home/hzhou/work/mpich-github
-    arg: /home/hzhou/work/modules/yaksa/src -clean
+    # usage: mymake_log.pl <dir> [-clean]
 
     parse_args()
     $if $opts{clean}
