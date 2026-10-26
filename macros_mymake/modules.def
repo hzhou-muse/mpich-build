@@ -60,9 +60,16 @@ subcode: recipe_hwloc
     run("CFLAGS=-fvisibility=hidden ./configure $t $extra")
     run("make -j$opts{jobs}")
 
+# cpu and cuda: no autogen and configure (see config_yaksa.def); hip and ze
+# still use them
 subcode: recipe_yaksa
-    $call yaksa_autogen
-    $call yaksa_configure, $extra
+    $if $extra=~/--with-(hip|ze)/
+        $call yaksa_autogen
+        $call yaksa_configure, $extra
+    $else
+        $call yaksa_quick_setup, $extra
+        $call yaksa_genpup
+        $call yaksa_quick_config
     run("make -j$opts{jobs}")
 
 # shared with checkout rebuilds (rebuild_yaksa)
@@ -71,6 +78,21 @@ subcode: yaksa_autogen
 
 subcode: yaksa_configure(extra)
     run("./configure --enable-embedded --enable-debug $(extra)")
+
+# the backends' pup sources, as autogen.sh does
+subcode: yaksa_genpup
+    $foreach $b in qw(seq cuda ze hip)
+        run("./src/backend/$b/genpup.py --pup-max-nesting=2")
+
+# a yaksa tree configured by mymake has mymake/opts
+subcode: yaksa_quick_setup(options)
+    run("mkdir -p mymake && cp maint/version.m4 mymake/")
+    run("rm -f libtool && ln -s ../libtool/libtool libtool")
+    mymake_inputs(".", "yaksa", {srcdir => "."}, "--enable-embedded --enable-debug $(options)")
+
+subcode: yaksa_quick_config
+    run("perl $mymake_dir/mymake_config.pl yaksa")
+    run("perl $mymake_dir/mymake_makefile.pl yaksa")
 
 subcode: recipe_libfabric
     run("sh autogen.sh")
@@ -277,10 +299,18 @@ fncode: rebuild_yaksa($repo, $moddir, $options, $extra, $jobs)
     $print "  yaksa: $n files updated from the checkout, log in $run_log"
     my @regen = grep { /(^|\/)(configure\.ac|Makefile\.am|autogen\.sh|genpup\.py|[^\/]+\.mk|[^\/]+\.m4)$/ } @changed
     chdir "$moddir/yaksa" or die "chdir $moddir/yaksa: $!\n"
-    $if @regen
-        $call yaksa_autogen
-    $if @regen or $extra
-        $call yaksa_configure, $options $extra
+    $if -f "mymake/opts"
+        # configured by mymake: regenerate, it takes seconds
+        my @pup = grep { /(^|\/)(genpup\.py|gencomm\.py|yutils\.py)$/ } @changed
+        $if @pup
+            $call yaksa_genpup
+        $call yaksa_quick_setup, $options $extra
+        $call yaksa_quick_config
+    $else
+        $if @regen
+            $call yaksa_autogen
+        $if @regen or $extra
+            $call yaksa_configure, $options $extra
     run("make clean")
     run("make -j$jobs")
     chdir $pwd
@@ -374,17 +404,20 @@ fncode: frame_setup($top, $c)
 
 # mymake/{args,opts,make_opts.mpich} in $top: the variant's options for
 # component $c, plus %$extra
-fncode: mymake_inputs($top, $c, $extra)
+fncode: mymake_inputs($top, $c, $extra, $args_in)
     $global %comp_opts
-    my $args = $comp_opts{$c}
+    my $args = defined $args_in ? $args_in : $comp_opts{$c}
     &call open_w, $top/mymake/args
         print Out "$args\n"
     my %o = (CC => $ENV{CC} || "gcc", CXX => $ENV{CXX} || "g++", FC => $ENV{FC} || "gfortran", quick => 1, %$extra)
+    my $cflags = "-g -O2"
     $foreach $a in split /\s+/, $args
         $if $a=~/^--([\w-]+)=(.*)/
             $o{$1} = $2
         $elif $a=~/^--([\w-]+)$/
             $o{$1} = 1
+        $elif $a=~/^CFLAGS=(.*)/
+            $cflags = $1
     &call open_w, $top/mymake/opts
         $foreach $k in sort keys %o
             print Out "$k: $o{$k}\n"
@@ -392,4 +425,4 @@ fncode: mymake_inputs($top, $c, $extra)
     chomp $ver
     &call open_w, $top/mymake/make_opts.mpich
         print Out "CC: $o{CC}\nCXX: $o{CXX}\nF77: $o{FC}\nFC: $o{FC}\n"
-        print Out "cc_version: gcc $ver\ncc_weak: \ncflags: -g -O2\nldflags: \n"
+        print Out "cc_version: gcc $ver\ncc_weak: \ncflags: $cflags\nldflags: \n"

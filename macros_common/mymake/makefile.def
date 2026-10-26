@@ -37,7 +37,13 @@ fncode: dump_makefile($makefile, $moddir)
 
     subcode: mymake_common_VARS
         $print "CONFIGS = @CONFIGS"
-        $if $opts{"with-cuda"}
+        my $nvcc = get_make_var("NVCC")
+        $if $nvcc
+            # yaksa: nvcc with its host compiler, and the architectures
+            my $gencode = get_make_var("CUDA_GENCODE")
+            $print "NVCC = $nvcc"
+            $print "CUDA_GENCODE = $gencode"
+        $elif $opts{"with-cuda"}
             $print "NVCC = $opts{'with-cuda'}/bin/nvcc"
         $print
         $map dump_variable, DEFS, DEFAULT_INCLUDES, INCLUDES, AM_CPPFLAGS, CPPFLAGS, AM_CFLAGS, CFLAGS, AM_LDFLAGS, LDFLAGS, LIBS
@@ -150,7 +156,10 @@ fncode: dump_makefile($makefile, $moddir)
                 $if -e "$mdir/src/gpu/cudalt.sh"
                     $cudalt = "src/gpu/cudalt.sh"
                 $print "%.lo: %.cu"
-                $call quiet_rule, NVCC, $cudalt \$\@ nvcc -c \x24(AM_CPPFLAGS) \$<
+                $if -e "$mdir/src/backend/cuda/cudalt.sh"
+                    $call quiet_rule, NVCC, src/backend/cuda/cudalt.sh \$\@ \x24(NVCC) \x24(AM_CPPFLAGS) \x24(CUDA_GENCODE) -c \$<
+                $else
+                    $call quiet_rule, NVCC, $cudalt \$\@ nvcc -c \x24(AM_CPPFLAGS) \$<
                 $print
             $if !$opts{disable_cxx}
                 $print "%.lo: %.cxx"

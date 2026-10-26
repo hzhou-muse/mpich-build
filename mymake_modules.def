@@ -108,7 +108,7 @@ subcode: build_components
             $only{$c} = 1
     my @todo
     $foreach $c in @components
-        my $key = "source: $src_key{$c}\noptions: $comp_opts{$c}\n"
+        my $key = built_key($c)
         my $stamp = "$variant_dir/$c/.mymake_built"
         my $old
         $if -f $stamp
@@ -146,6 +146,15 @@ subcode: build_components
             system "tail -15 $variant_dir/$c.log"
         die "build failed: @failed\n"
 
+# what a build of $c is up to date with; `recipe` changes when the way a
+# component is built changes (yaksa: configured by mymake, no autotools)
+fncode: built_key($c)
+    my %recipe = (yaksa => "quick")
+    my $key = "source: $src_key{$c}\noptions: $comp_opts{$c}\n"
+    $if $recipe{$c}
+        $key .= "recipe: $recipe{$c}\n"
+    return $key
+
 fncode: build_one($c)
     my $dir = "$variant_dir/$c"
     $run_log = "$variant_dir/$c.log"
@@ -157,7 +166,7 @@ fncode: build_one($c)
             print Out "\n$@"
         return 0
     &call open_w, $dir/.mymake_built
-        print Out "source: $src_key{$c}\noptions: $comp_opts{$c}\n"
+        print Out built_key($c)
     $print "  $c: done"
     return 1
 

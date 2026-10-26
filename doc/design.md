@@ -175,7 +175,7 @@ perl <mpich-build>/mymake/mymake_modules.pl --rebuild=<component> [component opt
   | Component | Source | Method |
   |---|---|---|
   | mpl, pmi, romio | in-tree | quick (mymake's existing `config_*` code) |
-  | yaksa | in-tree | quick: run `genpup.py`, write `yaksa_config.h` from a template and the Makefile from `Makefile.am` |
+  | yaksa | in-tree | quick: run `genpup.py`, write `yaksa_config.h` (template `yaksa_config.h.in`), `yaksa.h` and `localdefs`, and the Makefile from `Makefile.am`; cpu and CUDA, hip and ze still use autogen and configure |
   | hwloc, libfabric, ucx | submodules | autotools at first, quick later where it pays off |
   | libtool, mydef_boot | as today | as today |
 

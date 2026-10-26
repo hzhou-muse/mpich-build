@@ -30,6 +30,8 @@ page: mymake_sync_headers
     push @headers, ["src/mpl", "include/config.h.in", "mplconfig.h"]
     # PMI
     push @headers, ["src/pmi", "include/pmi_config.h.in", "pmi_config.h"]
+    # yaksa (own m4 directory)
+    push @headers, ["src/mpi/datatype/typerep/yaksa", "src/frontend/include/yaksa_config.h.in", "yaksa_config.h", "-I m4"]
     # ROMIO
     push @headers, ["src/mpi/romio", "adio/include/romioconf.h.in", "romioconf.h"]
     # Hydra
@@ -42,7 +44,8 @@ page: mymake_sync_headers
     push @headers, ["src/binding/fortran", "mpifort_config.h.in", "mpifort_config.h"]
 
     $foreach $h in @headers
-        my ($subdir, $header_in, $template_name) = @$h
+        my ($subdir, $header_in, $template_name, $aclocal_opt) = @$h
+        $aclocal_opt ||= "-I $mpich_dir/confdb"
         my $acdir = "$mpich_dir/$subdir"
         $if !-f "$acdir/configure.ac"
             warn "Skipping $subdir: no configure.ac\n"
@@ -59,7 +62,7 @@ page: mymake_sync_headers
         # run aclocal + autoheader in the configure.ac directory
         my $old_dir = getcwd()
         chdir $acdir or die "Can't chdir $acdir: $!\n"
-        system("aclocal -I $mpich_dir/confdb 2>&1")
+        system("aclocal $aclocal_opt 2>&1")
         my $rc = system("autoheader 2>&1")
         chdir $old_dir
 

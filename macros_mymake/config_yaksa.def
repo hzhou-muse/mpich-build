@@ -1,0 +1,206 @@
+# yaksa, built on its own (as a module) without autogen and configure:
+# yaksa_config.h, yaksa.h, localdefs and Makefile. The backends' pup sources
+# (genpup.py) are generated beforehand by the builder.
+#
+# Supported: the seq backend, plus cuda with opts with-cuda (and
+# with-cuda-sm, enable-cuda-p2p). hip and ze still go through configure.
+
+subcode: config_init_yaksa
+    my $d = comp_dir("src/mpi/datatype/typerep/yaksa")
+    $config_prefix = ""
+    $config_in = "$mymake_dir/config_templates/yaksa_config.h"
+    $config_out = "$d/src/frontend/include/yaksa_config.h"
+    $if $opts{"with-hip"} or $opts{"with-ze"}
+        die "yaksa quick mode: hip and ze are not supported (use configure)\n"
+
+subcode: config_yaksa
+    my $d = comp_dir("src/mpi/datatype/typerep/yaksa")
+    my ($yversion, $so_version) = yaksa_versions("$d/maint/version.m4")
+    $call ac_init, yaksa, $yversion, -, yaksa, -
+    $call set_config_defines
+    $call patch_yaksa_h
+    $call write_localdefs
+
+    subcode: set_config_defines
+        $config_defines{YAKSA_C_HAVE_VISIBILITY} = 1
+        $if $opts{"enable-embedded"}
+            $config_defines{YAKSA_EMBEDDED_BUILD} = 1
+        $if $opts{"enable-debug"} or $opts{"enable-g"}
+            $config_defines{YAKSA_DEBUG} = 1
+        $if test_cc_header($opts{CC}, "stdatomic.h")
+            $config_defines{HAVE_C11_ATOMICS} = 1
+
+        # the backends' P2P defaults, as configure's subcfg.m4 files
+        $config_defines{CUDA_P2P} = yaksa_p2p("cuda")
+        $config_defines{HIP_P2P} = yaksa_p2p("hip")
+        $config_defines{ZE_NATIVE} = 0
+
+        $if $opts{"with-cuda"}
+            my $p = $opts{"with-cuda"}
+            $if !-x "$p/bin/nvcc"
+                die "yaksa: CUDA was requested but $p/bin/nvcc is not there\n"
+            $config_defines{HAVE_CUDA} = 1
+            $config_defines{HAVE_LIBCUDART} = 1
+
+        $call set_alignof
+
+    # ALIGNOF_<type> for the types in the template ('byte' isn't a type: 0)
+    subcode: set_alignof
+        my @names
+        &call open_r, $config_in
+            $if /^#undef\s+ALIGNOF_(\w+)/
+                push @names, $1
+        get_alignof(\@names)
+
+    subcode: patch_yaksa_h
+        my %confs
+        $confs{YAKSA_VERSION} = $yversion
+        $confs{YAKSA_NUMVERSION} = yaksa_numversion($yversion)
+        autoconf_file("$d/src/frontend/include/yaksa.h", \%confs)
+
+    # what configure.ac assembles from the backends' autogen_info files
+    subcode: write_localdefs
+        my @info
+        $foreach $b in "seq", "cuda"
+            $if $b eq "cuda" and !$opts{"with-cuda"}
+                next
+            my ($depth, $autogen_info) = (undef, "$d/src/backend/$b/autogen_info")
+            &call open_r, $autogen_info
+                $if /^${b}_pup_max_nesting=(\d+)/
+                    $depth = $1
+            push @info, $depth ? "$b(depth=$depth)" : $b
+        my $localdefs = "$d/localdefs"
+        &call open_w, $localdefs
+            print Out "#! /bin/sh\n\nMPICH_YAKSA_INFO=\"@info\"\n"
+
+fncode: yaksa_versions($file)
+    my ($v, $so)
+    &call open_r, $file
+        $if /m4_define\(\[YAKSA_VERSION_m4\],\[(.*?)\]/
+            $v = $1
+        $elif /m4_define\(\[libyaksa_so_version_m4\],\[(.*?)\]/
+            $so = $1
+    $if !$v
+        die "yaksa: no version in $file\n"
+    return ($v, $so)
+
+# configure.ac: unreleased is 0, else MAJ.MIN.REV[ext[N]] as M MM RR E NN
+fncode: yaksa_numversion($v)
+    $if $v eq "unreleased"
+        return 0
+    $if $v!~/^(\d+)\.(\d+)\.?(\d*)([a-z]*)(\d*)$/
+        die "yaksa: can't parse version $v\n"
+    my ($maj, $min, $rev, $ext, $num) = ($1, $2, $3 || 0, $4, $5 || 0)
+    my %e = (a => 0, b => 1, rc => 2, p => 3)
+    $if $ext eq ""
+        $num = 0
+        $ext = 3
+    $else
+        $ext = $e{$ext}
+    return $maj * 10000000 + $min * 100000 + $rev * 1000 + $ext * 100 + $num
+
+# --enable-<backend>-p2p={yes|no|cliques}
+fncode: yaksa_p2p($backend)
+    my $v = $opts{"enable-$backend-p2p"}
+    my $B = uc($backend)
+    $if $v eq "no"
+        return "${B}_P2P_DISABLED"
+    $elif $v eq "cliques"
+        return "${B}_P2P_CLIQUES"
+    return "${B}_P2P_ENABLED"
+
+# fill config_defines{ALIGNOF_<name>} for names like UNSIGNED_LONG_LONG,
+# INT_FAST16_T, _BOOL
+fncode: get_alignof($names)
+    $global %config_defines
+    my %ctype
+    $foreach $n in @$names
+        my $t = lc($n)
+        $if $n eq "_BOOL"
+            $t = "_Bool"
+        $elif $n!~/_T$/
+            $t =~ s/_/ /g
+        $ctype{$n} = $t
+    my ($src, $exe) = (probe_path("alignof.c"), probe_path("alignof.out"))
+    # one program per type: a type that doesn't exist (byte) is just 0
+    &call open_w, $src
+        print Out "#include <stdio.h>\n#include <stdint.h>\n#include <stddef.h>\n#include <wchar.h>\n"
+        print Out "int main() {\n"
+        $foreach $n in @$names
+            print Out "#ifdef ALIGN_$n\n    printf(\"$n %d\\n\", (int) _Alignof($ctype{$n}));\n#endif\n"
+        print Out "    return 0;\n}\n"
+    my $defs
+    $foreach $n in @$names
+        $if $n ne "BYTE"
+            $defs .= " -DALIGN_$n"
+    my $t = `$opts{CC} $defs $src -o $exe 2>/dev/null && $exe`
+    $if $? != 0
+        die "yaksa: can't probe alignments\n"
+    $while $t=~/^(\w+) (\d+)/mg
+        $config_defines{"ALIGNOF_$1"} = $2
+    $config_defines{ALIGNOF_BYTE} = 0
+
+#----------------------------------------
+subcode: make_yaksa
+    my $d = comp_dir("src/mpi/datatype/typerep/yaksa")
+    my %conds
+    $if $opts{"enable-embedded"}
+        $conds{EMBEDDED_BUILD} = 1
+    # as decided by config_yaksa
+    my $config_h = "$d/src/frontend/include/yaksa_config.h"
+    &call open_r, $config_h
+        $if /^#define HAVE_C11_ATOMICS 1/
+            $conds{HAVE_C11_ATOMICS} = 1
+    $make_vars{DEFAULT_INCLUDES} = "-I. -Isrc/frontend/include"
+    $make_vars{CFLAGS} = "-std=c11 -fvisibility=hidden $opts{cflags}"
+    $make_vars{LIBS} = "-lpthread"
+    $if $opts{"with-cuda"}
+        my $p = $opts{"with-cuda"}
+        $conds{BUILD_CUDA_BACKEND} = 1
+        $conds{BUILD_CUDA_TESTS} = 1
+        $make_vars{LIBS} = "-lcudart -lpthread -lstdc++"
+        my $cc = $opts{CC}
+        $cc =~ s/\s+-std=\S+//
+        $make_vars{NVCC} = "$p/bin/nvcc -ccbin $cc"
+        $make_vars{CUDA_GENCODE} = cuda_gencode($p, $opts{"with-cuda-sm"} || "auto")
+    load_automake("$d/Makefile.am", \%conds)
+    @programs=()
+    dump_makefile("$d/Makefile")
+
+# configure's --with-cuda-sm: auto (the visible GPUs, else all-major),
+# all-major, a comma-separated list of numbers
+fncode: cuda_gencode($prefix, $spec)
+    my @sms
+    my $cuda_version = 0
+    my $cuda_h = "$prefix/include/cuda.h"
+    &call open_r, $cuda_h
+        $if /^#define CUDA_VERSION (\d+)/
+            $cuda_version = $1
+    $foreach $s in split /,/, $spec
+        $if $s eq "auto"
+            my $t = `nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null`
+            $foreach $c in split /\n/, $t
+                $c =~ s/\.//
+                push @sms, $c
+            $if !@sms
+                $s = "all-major"
+        $if $s eq "all-major"
+            $if $cuda_version >= 13000
+                push @sms, 80, 100, 120
+            $elif $cuda_version >= 11080
+                push @sms, 52, 60, 70, 80, 90
+            $elif $cuda_version >= 11000
+                push @sms, 52, 60, 70, 80
+            $elif $cuda_version >= 9000
+                push @sms, 30, 50, 60, 70
+            $else
+                push @sms, 30, 50, 60
+        $elif $s=~/^\d+a?$/
+            push @sms, $s
+        $elif $s ne "auto" and $s ne "none"
+            die "yaksa quick mode: --with-cuda-sm=$s is not supported\n"
+    my %seen
+    @sms = grep { !$seen{$_}++ } @sms
+    $if !@sms
+        die "yaksa: no CUDA architecture (--with-cuda-sm)\n"
+    return join(" ", map { "-gencode=arch=compute_$_,code=sm_$_" } @sms)
