@@ -77,10 +77,10 @@ subcode: mpich_slow
         $if -e "src/binding/fortran/Makefile.am"
             system "cp maint/version.m4 src/binding/fortran/"
             system "touch src/binding/fortran/localdefs"
-            $call add_rule_mpifort, mpifort
+            $call add_rule_fortran, fortran
         # $call add_rule_testing
 
-        subcode: add_rule_mpifort(name)
+        subcode: add_rule_fortran(name)
             $(set:dir=src/binding/fortran)
             my $mkfile="$(dir)/Makefile"
             push @extra_make_rules, ".PHONY: $(name) $(name)-install"

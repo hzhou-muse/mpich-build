@@ -80,7 +80,7 @@ Uses MPICH's real configure:
   simplified Makefile from it.
 - mpl, pmi and romio are autoreconf'd and configured by Makefile rules;
   hydra is configured and built separately; the Fortran binding runs its own
-  `autogen.sh` and `configure` (`make mpifort`).
+  `autogen.sh` and `configure` (`make fortran`).
 - The test suite is set up by `make testing`, which runs `test/mpi`'s
   autogen and configure.
 
@@ -242,8 +242,7 @@ Open: quick mode for libfabric and ucx (optional).
 
 - **Cheap drift detection for the config templates**: compare the template
   STAMP with the checkout's `configure.ac` files.
-- **Gaps between the modes**: the Fortran targets are `fortran` in quick
-  mode and `mpifort` in slow mode; quick mode generates only f77 test
+- **Gaps between the modes**: quick mode generates only f77 test
   Makefiles, and its f77 testlist drops the spawn, io, rma and profile
   directories.
 - **Robustness**: many `system` calls ignore failures, so a missing tool can

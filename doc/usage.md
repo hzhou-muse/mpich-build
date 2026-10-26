@@ -111,7 +111,7 @@ Same commands without `-quick`; it runs autoreconf and MPICH's configure:
 perl <mpich-build>/mymake/mymake.pl --prefix=$PWD/_inst [configure options]
 make -j$(nproc) && make install
 make hydra-install
-make mpifort && make mpifort-install
+make fortran && make fortran-install
 ```
 
 Use it when the configure step itself is what you are testing.
@@ -172,5 +172,4 @@ make bcasttest && mpirun -n 4 ./bcasttest
 | CUDA MPICH linked against CPU modules | Variant mismatch (a warning is printed): use the `gpu` tarball. |
 | Unexpanded `PAC_*` macros in a configure script (slow mode) | confdb wasn't copied into that subdirectory. |
 | `make: Nothing to be done for 'test'` | Slow mode: use `make testing`. |
-| `No rule to make target 'fortran'` | Slow mode: use `make mpifort`. |
 | A quick build misses a new MPICH config symbol | Re-run `mymake_sync_headers.pl`, then teach the matching `macros_mymake/config_*.def` the value if needed. |
