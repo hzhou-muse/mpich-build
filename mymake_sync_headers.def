@@ -18,6 +18,11 @@ page: mymake_sync_headers
     # generate stubs needed by autoheader
     $call create_stubs
 
+    # hwloc is a submodule, at the commit this MPICH records
+    my $have_hwloc = (system("git -C $mpich_dir submodule update --init --depth 1 modules/hwloc >/dev/null 2>&1") == 0)
+    $if !$have_hwloc
+        warn "Can't fetch the hwloc submodule: no hwloc_config.h template\n"
+
     my $template_dir = $mymake_dir . "/config_templates"
     $if !-d $template_dir
         mkdir $template_dir or die "Can't mkdir $template_dir: $!\n"
@@ -32,6 +37,9 @@ page: mymake_sync_headers
     push @headers, ["src/pmi", "include/pmi_config.h.in", "pmi_config.h"]
     # yaksa (own m4 directory)
     push @headers, ["src/mpi/datatype/typerep/yaksa", "src/frontend/include/yaksa_config.h.in", "yaksa_config.h", "-I m4"]
+    # hwloc (submodule; its configure.ac uses config/ for m4)
+    $if $have_hwloc
+        push @headers, ["modules/hwloc", "include/private/autogen/config.h.in", "hwloc_config.h", "-I config"]
     # ROMIO
     push @headers, ["src/mpi/romio", "adio/include/romioconf.h.in", "romioconf.h"]
     # Hydra
@@ -90,6 +98,7 @@ page: mymake_sync_headers
     &call open_W, $template_dir/STAMP
         print Out "commit: $commit"
         print Out "autoconf: $autoconf"
+
     print "STAMP: $commit"
 
     # clean up

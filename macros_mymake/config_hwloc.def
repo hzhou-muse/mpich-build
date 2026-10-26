@@ -4,13 +4,12 @@
 # cuda, ...), as the module recipe configures it (--enable-embedded-mode
 # --enable-visibility=no --disable-libxml2 --disable-nvml --disable-cuda
 # --disable-opencl --disable-rsmi). The private header's template is
-# include/private/autogen/config.h.in, which the builder makes with
-# autoheader from the pinned hwloc sources (opts config_in).
+# config_templates/hwloc_config.h (mymake_sync_headers.pl).
 
 subcode: config_init_hwloc
     my $d = comp_dir("modules/hwloc")
     $config_prefix = ""
-    $config_in = $opts{config_in} || "$d/include/private/autogen/config.h.in"
+    $config_in = "$mymake_dir/config_templates/hwloc_config.h"
     $config_out = "$d/include/private/autogen/config.h"
     $if $opts{uname} and $opts{uname}!~/Linux/i
         die "hwloc quick mode: Linux only\n"

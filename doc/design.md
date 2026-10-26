@@ -87,7 +87,7 @@ Uses MPICH's real configure:
 ## Config templates
 
 Quick mode needs the autoheader templates (`*.h.in`) of MPICH's configure
-scripts: mpichconf, mplconfig, pmi_config, romioconf, hydra_config,
+scripts: mpichconf, mplconfig, pmi_config, yaksa_config, hwloc_config, romioconf, hydra_config,
 mpitestconf, dtpoolsconf and mpifort_config. They are not committed.
 `mymake_sync_headers.pl` clones `main` of a local MPICH repository, runs
 aclocal and autoheader for each component, and copies the results into
@@ -176,7 +176,7 @@ perl <mpich-build>/mymake/mymake_modules.pl --rebuild=<component> [component opt
   |---|---|---|
   | mpl, pmi, romio | in-tree | quick (mymake's existing `config_*` code) |
   | yaksa | in-tree | quick: run `genpup.py`, write `yaksa_config.h` (template `yaksa_config.h.in`), `yaksa.h` and `localdefs`, and the Makefile from `Makefile.am`; seq, cuda, hip and ze backends |
-  | hwloc | submodule | quick: `autoheader` for the private config header template, then the config headers, `static-components.h` and the Makefile of `hwloc/` (Linux, embedded, no optional components) |
+  | hwloc | submodule | quick: the config headers (template `hwloc_config.h`), `static-components.h` and the Makefile of `hwloc/` (Linux, embedded, no optional components) |
   | libfabric, ucx | submodules | autotools at first, quick later where it pays off |
   | libtool, mydef_boot | as today | as today |
 
