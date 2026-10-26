@@ -68,7 +68,7 @@ subcode: recipe_yaksa
         $call yaksa_configure, $extra
     $else
         $call yaksa_quick_setup, $extra
-        $call yaksa_genpup
+        $call yaksa_genpup, $extra
         $call yaksa_quick_config
     run("make -j$opts{jobs}")
 
@@ -79,10 +79,18 @@ subcode: yaksa_autogen
 subcode: yaksa_configure(extra)
     run("./configure --enable-embedded --enable-debug $(extra)")
 
-# the backends' pup sources, as autogen.sh does
-subcode: yaksa_genpup
-    $foreach $b in qw(seq cuda ze hip)
+# the pup sources of the backends the options select (autogen.sh does all)
+subcode: yaksa_genpup(options)
+    $foreach $b in yaksa_backends("$(options)")
         run("./src/backend/$b/genpup.py --pup-max-nesting=2")
+
+# seq, plus the GPU backend the options ask for
+fncode: yaksa_backends($options)
+    my @b = ("seq")
+    $foreach $g in qw(cuda ze hip)
+        $if $options=~/--with-$g\b/
+            push @b, $g
+    return @b
 
 # a yaksa tree configured by mymake has mymake/opts
 subcode: yaksa_quick_setup(options)
@@ -302,8 +310,8 @@ fncode: rebuild_yaksa($repo, $moddir, $options, $extra, $jobs)
     $if -f "mymake/opts"
         # configured by mymake: regenerate, it takes seconds
         my @pup = grep { /(^|\/)(genpup\.py|gencomm\.py|yutils\.py)$/ } @changed
-        $if @pup
-            $call yaksa_genpup
+        $if @pup or $extra
+            $call yaksa_genpup, $options $extra
         $call yaksa_quick_setup, $options $extra
         $call yaksa_quick_config
     $else
