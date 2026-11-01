@@ -18,6 +18,17 @@ subcode: set_variant
     $elif $opts{name} eq "gpu"
         $if !$cuda_prefix
             die "variant gpu: CUDA not found (no nvcc on PATH, no /usr/local/cuda)\n"
+        # mpl's cudalt.sh calls a bare nvcc, so CUDA found via /usr/local/cuda
+        # must be on PATH too
+        $if !-x "$cuda_prefix/bin/nvcc"
+            die "variant gpu: no $cuda_prefix/bin/nvcc\n"
+        $if ":$ENV{PATH}:" !~ /:\Q$cuda_prefix\E\/bin:/
+            $ENV{PATH} = "$cuda_prefix/bin:$ENV{PATH}"
+        # libfabric links -lnvidia-ml (and -lcuda); a host with only the driver's
+        # versioned libnvidia-ml.so.1 links against CUDA's stubs. LIBRARY_PATH is
+        # searched after the -L paths, at link time only.
+        $if -d "$cuda_prefix/lib64/stubs"
+            $ENV{LIBRARY_PATH} = $ENV{LIBRARY_PATH} ? "$ENV{LIBRARY_PATH}:$cuda_prefix/lib64/stubs" : "$cuda_prefix/lib64/stubs"
         # pmi and romio compile against mpl's GPU headers (cuda.h)
         $(for:yaksa,libfabric,ucx,mpl,pmi,romio)
             $comp_opts{$1} = "--with-cuda=$cuda_prefix"
