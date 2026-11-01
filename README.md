@@ -32,7 +32,7 @@ cd mpich-build
 mydef_make && make                    # compile all pages into mymake/*.pl
 
 # quick mode needs the autoheader templates, generated once from a local MPICH
-# repository ($MPICH_GITHUB or ~/mpich-github; see doc/usage.md)
+# repository ($MPICH_GITHUB, $CLAUDE_ROOT/projects/mpich-github or ~/mpich-github; see doc/usage.md)
 perl mymake/mymake_sync_headers.pl
 
 # in an MPICH checkout
@@ -80,6 +80,7 @@ component with different options.
   the spawn, io, rma and profile directories. Use slow mode for those.
 - A modules tarball is meant for the host that built it.
 - The template generator needs a local MPICH repository: `$MPICH_GITHUB`, or
-  `~/mpich-github`, `~/work/mpich-github` or `~/projects/mpich-github`.
+  `$CLAUDE_ROOT/projects/mpich-github`, `~/mpich-github`, `~/work/mpich-github`
+  or `~/projects/mpich-github`.
 
 See [doc/design.md](doc/design.md) for how it works and for open questions.

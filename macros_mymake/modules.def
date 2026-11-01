@@ -338,7 +338,10 @@ fncode: check_modules
     my $moddir = $opts{moddir}
     my $stamp = read_stamp("$moddir/modules.stamp")
     $if !$stamp
-        $print "modules: no modules.stamp in $moddir (older tarball), skipping checks"
+        # an old tarball, often an inherited MODTARBALL; it may not match the host
+        # or the checkout, so say so loudly
+        my $from = $ENV{MODTARBALL} ? " (MODTARBALL=$ENV{MODTARBALL})" : ""
+        $print "WARNING: no modules.stamp in $moddir: the modules are not from mymake_modules.pl$from; variant and submodule checks skipped"
         return
     my $want = modules_variant()
     $if $stamp->{variant} ne $want

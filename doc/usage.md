@@ -3,6 +3,7 @@
 Paths below use `<mpich-build>` for this repository. Build in an MPICH
 checkout of your choice; the config templates come from a separate local MPICH
 repository (its `main` branch): `$MPICH_GITHUB`, or else the first of
+`$CLAUDE_ROOT/projects/mpich-github` (when `CLAUDE_ROOT` is set),
 `~/mpich-github`, `~/work/mpich-github` and `~/projects/mpich-github`.
 
 ## Prerequisites
@@ -43,8 +44,9 @@ cat <mpich-build>/mymake/config_templates/STAMP
 ```
 
 The script takes the MPICH repository from `MPICH_GITHUB`; if that is unset it
-uses the first of `~/mpich-github`, `~/work/mpich-github` and
-`~/projects/mpich-github` that exists, and stops if there is none.
+uses the first of `$CLAUDE_ROOT/projects/mpich-github` (when `CLAUDE_ROOT` is
+set), `~/mpich-github`, `~/work/mpich-github` and `~/projects/mpich-github`
+that exists, and stops if there is none.
 Expect 10 templates (it fetches the hwloc submodule for `hwloc_config.h`, so it
 needs network). Re-run it when quick mode trips over a configure change in
 MPICH, or when a build says a template is stale.
@@ -64,8 +66,11 @@ It writes `../mpich-modules/modules-<variant>.tar.gz` next to the checkout,
 keeping the build trees in `../mpich-modules/<variant>/` so a rerun only
 redoes what changed (no-op rerun: seconds; gpu from scratch: a few minutes,
 ucx is the slowest). Options: `--mpich=<checkout>`, `--out=<dir>`, `-j=N`,
-`--only=a,b` (rebuild just these), `--force`. The `gpu` variant needs `nvcc` on
-`PATH` (or `/usr/local/cuda`), `hip` needs ROCm in `/opt/rocm`.
+`--only=a,b` (rebuild just these), `--force`. The `gpu` variant takes CUDA from
+`nvcc` on `PATH`, or else `/usr/local/cuda` (whose `bin` and `lib64/stubs` it
+adds to `PATH` and `LIBRARY_PATH`); `hip` needs ROCm in `/opt/rocm`. A step that
+fails on a passing glitch (e.g. an NFS `rm -rf`) needs only a rerun: finished
+components are kept.
 
 A checkout finds its modules in this order: `$MODDIR` (an unpacked tree, used
 in place), the tree already unpacked in the checkout's `mymake/`,
@@ -172,6 +177,7 @@ make bcasttest && mpirun -n 4 ./bcasttest
 | Symptom | Cause |
 |---|---|
 | `no modules tarball` | None of the places above has one: run `mymake_modules.pl`, or set `MODTARBALL`. |
+| `WARNING: no modules.stamp` | The tarball is not from `mymake_modules.pl`, often an old one named by an inherited `MODTARBALL` (e.g. from a shell profile): unset or repoint it. |
 | `undefined reference to __isoc23_*`, missing `crtbeginS.o` | The tarball was built on a different host; build one here. |
 | CUDA MPICH linked against CPU modules | Variant mismatch (a warning is printed): use the `gpu` tarball. |
 | Unexpanded `PAC_*` macros in a configure script (slow mode) | confdb wasn't copied into that subdirectory. |
