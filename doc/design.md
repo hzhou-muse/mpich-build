@@ -27,6 +27,7 @@ portable binary artifacts.
 | `mymake_test.def` | `mymake_test.pl`, and `mymake_testing.pl` for slow-mode test setup |
 | `mymake_log.def` | `mymake_log.pl` / `mymake_log_show.pl`: add function-trace logging to sources and display it (debugging aid) |
 | `mymake_sync_headers.def` | `mymake_sync_headers.pl`: generates the quick-mode config templates |
+| `mymake_modules.def` | `mymake_modules.pl`: builds the per-host modules tarball |
 | `macros_common/` | Generic helpers: options, file I/O, automake parsing (`load_automake`), Makefile writing (`dump_makefile`), config header writing, libtool |
 | `macros_mymake/` | MPICH specifics: arguments, subdirectories (mpl, pmi, romio, hydra), the per-component `config_*.def` used by quick mode, bindings, wrappers (`mpicc_etc.def`) |
 | `mymake/` | Generated output (not committed): the `*.pl` scripts and `config_templates/` |

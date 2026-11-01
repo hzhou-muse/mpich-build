@@ -22,16 +22,14 @@ pmi, romio, libtool, ...) prebuilt from a **modules tree**, which
 
 ## Quick start
 
-Needs [MyDef](https://github.com/hzhou/MyDef) (`mydef_page`), Perl, Python 3,
+Needs [MyDef](https://github.com/hzhou/MyDef) (`mydef_make`, `mydef_page`), Perl, Python 3,
 git, gcc/g++/gfortran and autotools. Details are in
 [doc/usage.md](doc/usage.md).
 
 ```sh
 git clone https://github.com/hzhou-muse/mpich-build
 cd mpich-build
-for f in mymake mymake_config mymake_ld mymake_libtool mymake_test mymake_log mymake_sync_headers; do
-    mydef_page $f.def
-done
+mydef_make && make                    # compile all pages into mymake/*.pl
 
 # quick mode needs the autoheader templates, generated once from a local MPICH
 # repository ($MPICH_GITHUB or ~/mpich-github; see doc/usage.md)

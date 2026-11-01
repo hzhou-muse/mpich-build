@@ -7,7 +7,7 @@ repository (its `main` branch): `$MPICH_GITHUB`, or else the first of
 
 ## Prerequisites
 
-- MyDef (`mydef_page` on `PATH`) to compile the pages.
+- MyDef (`mydef_make` and `mydef_page` on `PATH`) to compile the pages.
 - Perl, Python 3, git.
 - gcc and g++; gfortran for the Fortran binding and tests (otherwise build
   with `--disable-fortran`).
@@ -22,15 +22,16 @@ repository (its `main` branch): `$MPICH_GITHUB`, or else the first of
 
 ```sh
 cd <mpich-build>
-for f in mymake mymake_config mymake_ld mymake_libtool mymake_test mymake_log mymake_sync_headers; do
-    mydef_page $f.def
-done
+mydef_make      # writes the Makefile from the pages and their includes (uses ./config)
+make            # compiles every page that is missing or out of date
 ```
 
-The scripts land in `<mpich-build>/mymake/`. Check the output for
-`Code ... not found!` or `... .def not found`: mydef still writes the script,
-with that part missing. Recompile after pulling or editing; the `macros_*`
-files are shared between pages, so recompiling all of them is simplest.
+The scripts land in `<mpich-build>/mymake/`. The Makefile is generated, not
+tracked: it has a rule for every script the pages emit, with the `macros_*`
+files each page includes as dependencies. After pulling or editing, run `make`;
+rerun `mydef_make` first when a page or an include was added or removed. Check
+the output for `Code ... not found!` or `... .def not found`: mydef still
+writes the script, with that part missing.
 
 ### 2. Generate the config templates (quick mode)
 
