@@ -379,8 +379,11 @@ subcode: get_c_features
         $config_defines{USE_SYM_HEAP} = 1
         $config_defines{STRERROR_R_CHAR_P} = 1
         $if $opts{CC}=~/icx/
-            $config_defines{HAVE_PRAGMA_WEAK} = undef
-            $config_defines{HAVE_MULTIPLE_PRAGMA_WEAK} = undef
+            # icx accepts "#pragma weak a = b" but emits no alias (no MPI_
+            # symbols at all); its configure picks the alias attribute
+            $(for:a in PRAGMA_WEAK,PRAGMA_WEAK_ALIAS,MULTIPLE_PRAGMA_WEAK)
+                $config_defines{HAVE_$(a)} = undef
+            $config_defines{HAVE_ATTR_WEAK_ALIAS} = 1
     $if $opts{uname}=~/Darwin/i
         $(for:a in PRAGMA_WEAK,PRAGMA_WEAK_ALIAS,MULTIPLE_PRAGMA_WEAK)
             $config_defines{HAVE_$(a)} = undef
