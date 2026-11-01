@@ -4,8 +4,9 @@ include: macros_mymake/modules.def
 output_dir: ./mymake
 
 # Build a modules tarball for one preset variant from an MPICH checkout:
-#     mymake_modules.pl --name=cpu|gpu|hip [--mpich=<checkout>] [--out=<dir>]
+#     mymake_modules.pl --name=cpu|gpu|hip|ze [--mpich=<checkout>] [--out=<dir>]
 #                       [-j=N] [--only=hwloc,yaksa] [--force]
+# (ze also takes yaksa's --enable-ze-native=<device> and --enable-ze-revision-id=<n>)
 # or, inside a checkout whose modules are unpacked in mymake/, rebuild one
 # component from the checkout's source, with extra configure options:
 #     mymake_modules.pl --rebuild=yaksa [configure options]
@@ -32,7 +33,7 @@ subcode: parse_args_modules
     $opts{mpich} = $pwd
     $opts{jobs} = `nproc`
     chomp $opts{jobs}
-    $global @extra_args
+    $global @extra_args, @variant_args
     $foreach $a in @ARGV
         $if $a=~/^--?(name|mpich|out|only|rebuild)=(.*)/
             $opts{$1} = $2
@@ -40,10 +41,13 @@ subcode: parse_args_modules
             $opts{jobs} = $1
         $elif $a eq "--force"
             $opts{force} = 1
+        $elif $a=~/^--enable-ze-(native|revision-id)=/ and !grep { /^--rebuild=/ } @ARGV
+            # yaksa options of the ze variant
+            push @variant_args, $a
         $else
             push @extra_args, $a
     $if @extra_args and !$opts{rebuild}
-        die "Usage: $0 --name=cpu|gpu|hip [--mpich=<checkout>] [--out=<dir>] [-j=N] [--only=a,b] [--force]\n       $0 --rebuild=yaksa [configure options]\n"
+        die "Usage: $0 --name=cpu|gpu|hip|ze [--mpich=<checkout>] [--out=<dir>] [-j=N] [--only=a,b] [--force]\n       $0 --name=ze [--enable-ze-native=<device>] [--enable-ze-revision-id=<n>] ...\n       $0 --rebuild=yaksa [configure options]\n"
     # the rest is for building a variant
     $if !$opts{rebuild}
         $opts{mpich} = Cwd::abs_path($opts{mpich})

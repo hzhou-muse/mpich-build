@@ -18,7 +18,7 @@ The core is **mymake**, a set of Perl scripts generated from
 Both modes take the external components (hwloc, libfabric, ucx, yaksa, mpl,
 pmi, romio, libtool, ...) prebuilt from a **modules tree**, which
 `mymake_modules.pl` builds once per host and variant (`cpu`, `gpu` for CUDA,
-`hip`) and packs into a tarball.
+`hip`, `ze` for Intel GPUs) and packs into a tarball.
 
 ## Quick start
 
@@ -37,7 +37,7 @@ perl mymake/mymake_sync_headers.pl
 
 # in an MPICH checkout
 cd /path/to/mpich
-perl /path/to/mpich-build/mymake/mymake_modules.pl --name=cpu      # once; or gpu, hip
+perl /path/to/mpich-build/mymake/mymake_modules.pl --name=cpu      # once; or gpu, hip, ze
 perl /path/to/mpich-build/mymake/mymake.pl -quick --prefix=$PWD/_inst
 make -j$(nproc) && make install
 make hydra-install                    # mpiexec
@@ -45,7 +45,7 @@ make hydra-install                    # mpiexec
 
 `mymake_modules.pl` writes `../mpich-modules/modules-cpu.tar.gz` next to the
 checkout, and `mymake.pl` finds it there. With `--with-cuda`, build the `gpu`
-variant first.
+variant first; with `--with-ze`, the `ze` variant.
 
 ## What is in here
 
@@ -73,9 +73,11 @@ component with different options.
 
 ## Status and limits
 
-- Linux, x86_64, and gcc are what quick mode is written and tested for.
-- yaksa's HIP and ZE support and the `hip` variant were ported from configure
-  but have not been tested on hardware.
+- Linux, x86_64, and gcc are what quick mode is written and tested for; icx
+  (Intel oneAPI) builds too, tested on ALCF Aurora.
+- yaksa's HIP support and the `hip` variant were ported from configure but
+  have not been tested on hardware. The `ze` variant builds and links on
+  Aurora (PVC, `--enable-ze-native=pvc`); GPU runs are not tested yet.
 - Quick mode generates only f77 test Makefiles, and its f77 testlist leaves out
   the spawn, io, rma and profile directories. Use slow mode for those.
 - A modules tarball is meant for the host that built it.

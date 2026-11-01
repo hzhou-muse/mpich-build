@@ -59,7 +59,7 @@ an MPICH checkout, at the commits that checkout records:
 
 ```sh
 cd <MPICH checkout>
-perl <mpich-build>/mymake/mymake_modules.pl --name=cpu     # or gpu (CUDA), hip
+perl <mpich-build>/mymake/mymake_modules.pl --name=cpu     # or gpu (CUDA), hip, ze (Intel GPU)
 ```
 
 It writes `../mpich-modules/modules-<variant>.tar.gz` next to the checkout,
@@ -68,7 +68,13 @@ redoes what changed (no-op rerun: seconds; gpu from scratch: a few minutes,
 ucx is the slowest). Options: `--mpich=<checkout>`, `--out=<dir>`, `-j=N`,
 `--only=a,b` (rebuild just these), `--force`. The `gpu` variant takes CUDA from
 `nvcc` on `PATH`, or else `/usr/local/cuda` (whose `bin` and `lib64/stubs` it
-adds to `PATH` and `LIBRARY_PATH`); `hip` needs ROCm in `/opt/rocm`. A step that
+adds to `PATH` and `LIBRARY_PATH`); `hip` needs ROCm in `/opt/rocm`; `ze` needs
+Level Zero (`include/level_zero/ze_api.h` in `/usr` or `/usr/local`) and `ocloc`,
+and takes yaksa's `--enable-ze-native=<device>` and
+`--enable-ze-revision-id=<n>`. Without `--enable-ze-native`, yaksa compiles its
+kernels to SPIR-V with `ocloc -device skl`, which newer ocloc releases reject
+(e.g. on Aurora: use `--enable-ze-native=pvc`). Set `CC`, `CXX` and `FC` to
+build the modules with other compilers (e.g. `CC=icx CXX=icpx FC=ifx`). A step that
 fails on a passing glitch (e.g. an NFS `rm -rf`) needs only a rerun: finished
 components are kept.
 
@@ -76,7 +82,7 @@ A checkout finds its modules in this order: `$MODDIR` (an unpacked tree, used
 in place), the tree already unpacked in the checkout's `mymake/`,
 `$MODTARBALL`, `modules.tar.gz` in the checkout, then
 `../mpich-modules/modules-<variant>.tar.gz` (variant `gpu` with `--with-cuda`,
-`hip` with `--with-hip`, else `cpu`). A `modules[-<name>].tar.gz` that is given
+`hip` with `--with-hip`, `ze` with `--with-ze`, else `cpu`). A `modules[-<name>].tar.gz` that is given
 is swapped for `modules-<variant>.tar.gz` next to it when that exists.
 
 Each tarball carries a `modules.stamp` (variant, MPICH commit, compilers, and a

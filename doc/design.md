@@ -116,8 +116,8 @@ as follows:
 2. Otherwise unpack a modules tarball into the checkout's `mymake/` and use
    that. The tarball is `$MODTARBALL` if set, else
    `../mpich-modules/modules-<variant>.tar.gz` next to the checkout, where
-   `<variant>` is `gpu` with `--with-cuda`, `hip` with `--with-hip`, and `cpu`
-   otherwise. A tree already unpacked in the checkout's `mymake/` is reused,
+   `<variant>` is `gpu` with `--with-cuda`, `hip` with `--with-hip`, `ze`
+   with `--with-ze`, and `cpu` otherwise. A tree already unpacked in the checkout's `mymake/` is reused,
    and `modules.tar.gz` in the checkout is also looked for (see usage.md).
 
 The Makefile keeps rules to build each component in the tree, so make only
@@ -148,14 +148,17 @@ perl <mpich-build>/mymake/mymake_modules.pl --rebuild=<component> [component opt
 ```
 
 - **Variants are preset.** `mymake_modules.pl` knows a fixed set of variants
-  (`cpu`, `gpu` for CUDA, and others such as hip or ze where the host has
-  them) and hard-codes their options, filling in host details by detection
+  (`cpu`, `gpu` for CUDA, `hip`, and `ze` for Intel GPUs) and hard-codes their options, filling in host details by detection
   (e.g. the CUDA prefix from `nvcc` or `/usr/local/cuda`). Each component
   takes the variant in its own terms (e.g. yaksa's `--with-cuda`, ucx's
   `--with-cuda`, mpl's GPU support; debug flags differ per component too),
   so this mapping is per-component code, not a set of shared options. There
   is no config file and no saved options: building a variant is just
-  `--name=<variant>`.
+  `--name=<variant>`. The one exception is `ze`, which passes yaksa's
+  `--enable-ze-native=<device>` and `--enable-ze-revision-id=<n>` through,
+  since the native target is a property of the GPU, not of the host's
+  software (and yaksa's SPIR-V fallback needs an ocloc that still knows
+  `skl`). The `ze` variant builds ucx `--without-ze`.
 - **Source.** Components come from an MPICH checkout (`--mpich`, default the
   current directory): in-tree components from their directories, submodules
   at the commits the checkout records (`git ls-tree HEAD modules/`).
@@ -211,7 +214,8 @@ perl <mpich-build>/mymake/mymake_modules.pl --rebuild=<component> [component opt
 Done: mpl, mpi_h, pmi, romio, yaksa (seq, cuda, hip, ze) and hwloc build in
 quick mode; the STAMP, the lookup and the rebuild on drift; the builder
 reproduces what the old hzhou/mpich-modules scripts built, which is retired.
-Yaksa's hip and ze support is ported from configure but untested on hardware.
+Yaksa's hip support is ported from configure but untested on hardware; ze
+builds and links on Aurora (PVC, icx), not yet run on a GPU.
 Open: quick mode for libfabric and ucx (optional).
 
 ## Decisions

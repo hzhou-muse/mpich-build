@@ -13,6 +13,8 @@ macros:
 # -- variants: per-component configure options --------------------
 subcode: set_variant
     $global %comp_opts
+    $if @variant_args and $opts{name} ne "ze"
+        die "@variant_args: only for --name=ze\n"
     $if $opts{name} eq "cpu"
         NOOP
     $elif $opts{name} eq "gpu"
@@ -40,11 +42,24 @@ subcode: set_variant
         $comp_opts{ucx} = "--with-rocm=$rocm_prefix"
         $(for:mpl,pmi,romio)
             $comp_opts{$1} = "--with-hip=$rocm_prefix"
+    $elif $opts{name} eq "ze"
+        $if !$ze_prefix
+            die "variant ze: Level Zero not found (no include/level_zero/ze_api.h in /usr or /usr/local)\n"
+        # yaksa's ze backend compiles its kernels with ocloc; without
+        # --enable-ze-native it makes SPIR-V with "-device skl", which newer
+        # ocloc releases reject, so pass e.g. --enable-ze-native=pvc there
+        $(for:yaksa,mpl,pmi,romio)
+            $comp_opts{$1} = "--with-ze=$ze_prefix"
+        $if @variant_args
+            $comp_opts{yaksa} .= " " . join(' ', @variant_args)
+        # ucx's ze transport is not needed (ch4:ofi or ch4:ucx without ze)
+        # and fails to compile with clang-based compilers such as icx
+        $comp_opts{ucx} = "--without-ze"
     $else
-        die "unknown variant $opts{name} (cpu, gpu, hip)\n"
+        die "unknown variant $opts{name} (cpu, gpu, hip, ze)\n"
 
 subcode: detect_host
-    $global $cuda_prefix, $rocm_prefix
+    $global $cuda_prefix, $rocm_prefix, $ze_prefix
     my $nvcc = `which nvcc 2>/dev/null`
     chomp $nvcc
     $if $nvcc=~/^(.*)\/bin\/nvcc$/
@@ -54,6 +69,9 @@ subcode: detect_host
     $foreach $d in "/opt/rocm", "/usr/local/rocm"
         $if !$rocm_prefix and -d $d
             $rocm_prefix = $d
+    $foreach $d in "/usr", "/usr/local"
+        $if !$ze_prefix and -f "$d/include/level_zero/ze_api.h"
+            $ze_prefix = $d
 
 # -- recipes -------------------------------------------------------
 subcode: recipe_libtool
@@ -197,6 +215,8 @@ fncode: modules_variant
         return "gpu"
     $elif $opts{"with-hip"}
         return "hip"
+    $elif $opts{"with-ze"}
+        return "ze"
     return "cpu"
 
 # MODTARBALL, else modules.tar.gz in the checkout, else
