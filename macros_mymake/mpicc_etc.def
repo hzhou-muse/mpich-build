@@ -46,6 +46,10 @@ subcode: patch_mpicc_etc
     $(for:C,CPP,LD)
         $confs{WRAPPER_$1FLAGS}=""
     $confs{WRAPPER_LIBS} = ""
+    $if $opts{"with-ze"}
+        my $p = gpu_prefix($opts{"with-ze"})
+        $if $p
+            $confs{WRAPPER_LDFLAGS} = "-Wl,-rpath -Wl,$p/lib64"
 
     $if $opts{CFLAGS}=~/-fsanitize=(address|undefined)/
         $confs{WRAPPER_CFLAGS} .= " -fsanitize=$1"
