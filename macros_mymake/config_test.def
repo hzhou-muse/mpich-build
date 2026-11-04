@@ -61,6 +61,9 @@ subcode: config_test
         $elif $opts{"with-hip"}
             $config_defines{HAVE_GPU} = 1
             $config_defines{HAVE_HIP} = 1
+        $elif $opts{"with-ze"}
+            $config_defines{HAVE_GPU} = 1
+            $config_defines{HAVE_ZE} = 1
 
     subcode: patch_runtests
         my %confs
@@ -148,6 +151,13 @@ subcode: make_test
             $make_vars{CPPFLAGS} .= " -I$p/include"
             $make_vars{LDFLAGS} .= " -L$p/lib64"
             $make_vars{LIBS} .= " -lamdhip64"
+        $elif $opts{"with-ze"}
+            my $p = gpu_prefix($opts{"with-ze"})
+            $conds{HAVE_ZE} = 1
+            $if $p
+                $make_vars{CPPFLAGS} .= " -I$p/include"
+                $make_vars{LDFLAGS} .= " -L$p/lib64"
+            $make_vars{LIBS} .= " -lze_loader"
 
         $make_vars{LIBTOOL} = "$top_srcdir/libtool"
         $make_vars{CC} = "$MPICC"
