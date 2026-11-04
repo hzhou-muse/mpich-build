@@ -719,6 +719,13 @@ subcode: make_mpich
             $make_vars{LDFLAGS} .= " -L$p/lib64"
         $make_vars{LIBS} .= " -lxpmem"
 
+    $(for:cuda,hip,ze)
+        $case $opts{"with-$1"}
+            my $p = gpu_prefix($opts{"with-$1"})
+            $if $p
+                $make_vars{CPPFLAGS} .= " -I$p/include"
+                $make_vars{LDFLAGS} .= " -L$p/lib64"
+
     dump_makefile("Makefile", "mymake")
 
     # ------------------------
