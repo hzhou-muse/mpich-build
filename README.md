@@ -75,6 +75,14 @@ component with different options.
 
 - Linux, x86_64, and gcc are what quick mode is written and tested for; icx
   (Intel oneAPI) builds too, tested on ALCF Aurora.
+- macOS (arm64, Apple clang) builds `ch4:ofi` without Fortran
+  (`--disable-fortran` unless gfortran is installed). The `config_*.def` have
+  macOS values next to the Linux ones; the `cpu` modules leave out ucx (Linux
+  only), and libpmpi and libmpi are built separately (no weak symbols in
+  Mach-O). With Nix autotools, set `ACLOCAL_PATH` to the profile's
+  `share/aclocal` so `mymake_sync_headers.pl` finds `libtool.m4`.
+- `make -jN`: the scripts leave the job count to `MAKEFLAGS` when it is set,
+  else use `-j8` (`mymake_modules.pl -j=N` changes it).
 - yaksa's HIP support and the `hip` variant were ported from configure but
   have not been tested on hardware. The `ze` variant builds and links on
   Aurora (PVC, `--enable-ze-native=pvc`); GPU runs are not tested yet.
