@@ -31,8 +31,6 @@ page: mymake_modules
 subcode: parse_args_modules
     $opts{name} = "cpu"
     $opts{mpich} = $pwd
-    $opts{jobs} = `nproc`
-    chomp $opts{jobs}
     $global @extra_args, @variant_args
     $foreach $a in @ARGV
         $if $a=~/^--?(name|mpich|out|only|rebuild)=(.*)/
@@ -238,7 +236,7 @@ subcode: rebuild_in_checkout
     my $extra = join(' ', @extra_args)
     my $options = $stamp->{"options-yaksa"}
     $print "rebuild yaksa in $moddir/yaksa, options: $options $extra"
-    my $ok = eval { rebuild_yaksa($pwd, $moddir, $options, $extra, $opts{jobs}); 1 }
+    my $ok = eval { rebuild_yaksa($pwd, $moddir, $options, $extra); 1 }
     $if !$ok
         print $@
         system "tail -15 $moddir/yaksa-rebuild.log"
