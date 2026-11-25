@@ -73,6 +73,13 @@ subcode: detect_host
         $if !$ze_prefix and -f "$d/include/level_zero/ze_api.h"
             $ze_prefix = $d
 
+# make's job count: none when MAKEFLAGS is set (it has the user's), else
+# -j<opts jobs>, from -j=N (mymake_modules.pl), 8 by default
+fncode: make_j
+    $if $ENV{MAKEFLAGS}
+        return ""
+    return "-j" . ($opts{jobs} || 8)
+
 # -- recipes -------------------------------------------------------
 subcode: recipe_libtool
     &call open_w, configure.ac
@@ -90,14 +97,14 @@ subcode: recipe_hwloc
     mymake_inputs(".", "hwloc", {srcdir => "."}, "$args $extra")
     run("perl $mymake_dir/mymake_config.pl hwloc")
     run("perl $mymake_dir/mymake_makefile.pl hwloc")
-    run("make -C hwloc -j$opts{jobs}")
+    run("make -C hwloc " . make_j())
 
 # no autogen and configure (see config_yaksa.def)
 subcode: recipe_yaksa
     $call yaksa_quick_setup, $extra
     $call yaksa_genpup, $extra
     $call yaksa_quick_config
-    run("make -j$opts{jobs}")
+    run("make " . make_j())
 
 # shared with checkout rebuilds (rebuild_yaksa)
 subcode: yaksa_autogen
@@ -132,7 +139,7 @@ subcode: yaksa_quick_config
 subcode: recipe_libfabric
     run("sh autogen.sh")
     run("./configure --enable-embedded --enable-debug $extra")
-    run("make -j$opts{jobs}")
+    run("make " . make_j())
     run("find . -name '*.la' | xargs sed -i 's, -pthread,,g'")
 
 subcode: recipe_ucx
@@ -149,7 +156,7 @@ subcode: recipe_ucx
                 print Out $l
     run("sh autogen.sh")
     run("./configure --prefix=/MODPREFIX --disable-static --disable-numa $extra")
-    run("make -j$opts{jobs}")
+    run("make " . make_j())
     # mymake replaces MODDIR with the unpacked location
     my $dir = getcwd()
     run("find . -name '*.la' | xargs sed -i 's,$dir,MODDIR,g'")
@@ -167,20 +174,20 @@ subcode: recipe_mpl
     comp_setup($dir, $c)
     run("perl $mymake_dir/mymake_config.pl mpl")
     run("perl $mymake_dir/mymake_makefile.pl mpl")
-    run("make -j$opts{jobs}")
+    run("make " . make_j())
 
 subcode: recipe_pmi
     comp_setup($dir, $c)
     run("python3 maint/gen_pmi_msg.py")
     run("perl $mymake_dir/mymake_config.pl pmi")
     run("perl $mymake_dir/mymake_makefile.pl pmi")
-    run("make -j$opts{jobs}")
+    run("make " . make_j())
 
 subcode: recipe_romio
     comp_setup($dir, $c)
     run("perl $mymake_dir/mymake_config.pl romio")
     run("perl $mymake_dir/mymake_makefile.pl romio")
-    run("make -j$opts{jobs}")
+    run("make " . make_j())
 
 # the module is just include/ with the generated and copied headers
 subcode: recipe_mpi_h
@@ -328,7 +335,7 @@ fncode: sync_tree($repo, $dir, $dst)
 # Bring $moddir/yaksa up to date with the checkout's yaksa and rebuild it in
 # full (the tarball has no objects); autogen and configure run again only
 # when their inputs changed or extra options are given.
-fncode: rebuild_yaksa($repo, $moddir, $options, $extra, $jobs)
+fncode: rebuild_yaksa($repo, $moddir, $options, $extra)
     $run_log = "$moddir/yaksa-rebuild.log"
     unlink $run_log
     my @changed = sync_tree($repo, "$(yaksa_dir)", "$moddir/yaksa")
@@ -349,7 +356,7 @@ fncode: rebuild_yaksa($repo, $moddir, $options, $extra, $jobs)
         $if @regen or $extra
             $call yaksa_configure, $options $extra
     run("make clean")
-    run("make -j$jobs")
+    run("make " . make_j())
     chdir $pwd
 
 # Compare the modules tree with the checkout: warn about the variant and
@@ -379,9 +386,7 @@ fncode: check_modules
             $print "WARNING: yaksa differs from the checkout; not rebuilding it in the shared MODDIR $moddir"
             return
         $print "modules: yaksa differs from the checkout, rebuilding it in $moddir/yaksa"
-        my $jobs = `nproc`
-        chomp $jobs
-        my $ok = eval { rebuild_yaksa($pwd, $moddir, $stamp->{"options-yaksa"}, "", $jobs); 1 }
+        my $ok = eval { rebuild_yaksa($pwd, $moddir, $stamp->{"options-yaksa"}, ""); 1 }
         $if !$ok
             print $@
             system "tail -15 $moddir/yaksa-rebuild.log"
@@ -401,8 +406,6 @@ fncode: check_modules
             $print "modules: @rebuild differ from the checkout, rebuilding in $moddir"
             # the recipes' context, as in mymake_modules.pl
             local $opts{mpich} = $pwd
-            local $opts{jobs} = `nproc`
-            chomp $opts{jobs}
             $variant_dir = $moddir
             $foreach $c in qw(mpl mpi_h pmi romio)
                 $comp_opts{$c} = $stamp->{"options-$c"}
