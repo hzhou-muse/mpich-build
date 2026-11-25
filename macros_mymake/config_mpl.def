@@ -48,7 +48,12 @@ subcode: config_mpl
         $config_defines{HAVE_GCC_INTRINSIC_ATOMIC}=1
         $config_defines{HAVE_GCC_INTRINSIC_SYNC}=1
 
-        $config_defines{HAVE_X86INTRIN_H}=1
+        # x86 only (clang has an x86intrin.h that errors elsewhere)
+        my $arch = `uname -m`
+        $if $arch=~/^(x86_64|i.86)$/
+            $config_defines{HAVE_X86INTRIN_H}=1
+        $else
+            $config_defines{HAVE_X86INTRIN_H}=undef
 
         # /usr/include/libdrm/i915_drm.h
         $if -f "/usr/include/libdrm/i915_drm.h"
