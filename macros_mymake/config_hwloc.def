@@ -1,7 +1,7 @@
 # hwloc, embedded and built on its own (as a module) without autogen and
 # configure: the two config headers, hwloc/static-components.h and the
-# Makefile of hwloc/. Linux only, with no optional components (libxml2, pci,
-# cuda, ...), as the module recipe configures it (--enable-embedded-mode
+# Makefile of hwloc/. Linux or macOS, with no optional components (libxml2,
+# pci, cuda, ...), as the module recipe configures it (--enable-embedded-mode
 # --enable-visibility=no --disable-libxml2 --disable-nvml --disable-cuda
 # --disable-opencl --disable-rsmi). The private header's template is
 # config_templates/hwloc_config.h (mymake_sync_headers.pl).
@@ -11,8 +11,8 @@ subcode: config_init_hwloc
     $config_prefix = ""
     $config_in = "$mymake_dir/config_templates/hwloc_config.h"
     $config_out = "$d/include/private/autogen/config.h"
-    $if $opts{uname} and $opts{uname}!~/Linux/i
-        die "hwloc quick mode: Linux only\n"
+    $if $opts{uname} and $opts{uname}!~/Linux|Darwin/i
+        die "hwloc quick mode: Linux or macOS only\n"
 
 subcode: config_hwloc
     my $d = comp_dir("modules/hwloc")
@@ -35,21 +35,14 @@ subcode: config_hwloc
         $(for:a in HAVE_LANGINFO_H,HAVE_LOCALE_H,HAVE_SYS_PARAM_H,HAVE_TIME_H,HAVE_MKSTEMP)
             $config_defines{$(a)} = undef
 
-        # glibc: which functions the system headers declare
-        $(for:a in FABSF,MODFF,PTHREAD_GETAFFINITY_NP,PTHREAD_SETAFFINITY_NP,SCHED_GETCPU,SNPRINTF,STRTOULL,_SC_NPROCESSORS_CONF,_SC_NPROCESSORS_ONLN,_SC_PAGESIZE,_SC_PAGE_SIZE)
-            $config_defines{HAVE_DECL_$(a)} = 1
-        $(for:a in GETEXECNAME,GETPROGNAME,RUNNING_ON_VALGRIND,_PUTENV,_SC_LARGE_PAGESIZE,_SC_NPROC_CONF,_SC_NPROC_ONLN,_STRDUP)
-            $config_defines{HAVE_DECL_$(a)} = 0
-        $(for:a in FFS,FFSL,GETPAGESIZE,MEMALIGN,OPENAT,POSIX_MEMALIGN,PROGRAM_INVOCATION_NAME,PTHREAD_T,SETLOCALE,SSIZE_T,STRCASECMP,STRFTIME,STRNCASECMP,UNAME,__PROGNAME)
-            $config_defines{HAVE_$(a)} = 1
-
-        $(for:a in CORRECT_SNPRINTF,CPU_SET,CPU_SET_S,DECL_FFS,DECL_FFSL,DECL_STRCASECMP,DECL_STRNCASECMP,FFS,FFSL,LINUXIO,LINUXPCI,PTHREAD_MUTEX,SCHED_SETAFFINITY,STDINT_H,SYSCALL)
-            $config_defines{HWLOC_HAVE_$(a)} = 1
-        $(for:a in ALIGNED,ALWAYS_INLINE,COLD,CONST,CONSTRUCTOR,DEPRECATED,FORMAT,HOT,MALLOC,MAY_ALIAS,NONNULL,NORETURN,NO_INSTRUMENT_FUNCTION,PACKED,PURE,SENTINEL,UNUSED,WARN_UNUSED_RESULT,WEAK_ALIAS)
+        $if $opts{uname}=~/Darwin/i
+            $call set_config_defines_darwin
+        $else
+            $call set_config_defines_linux
+        $(for:a in ALIGNED,ALWAYS_INLINE,COLD,CONST,CONSTRUCTOR,DEPRECATED,FORMAT,HOT,MALLOC,MAY_ALIAS,NONNULL,NORETURN,NO_INSTRUMENT_FUNCTION,PACKED,PURE,SENTINEL,UNUSED,WARN_UNUSED_RESULT)
             $config_defines{HWLOC_HAVE_ATTRIBUTE_$(a)} = 1
         $config_defines{HWLOC_HAVE_ATTRIBUTE} = ""
         $config_defines{HWLOC_C_HAVE_VISIBILITY} = 0
-        $config_defines{HWLOC_LINUX_SYS} = 1
         $config_defines{HWLOC_SYM_TRANSFORM} = 0
         $config_defines{HWLOC_SYM_PREFIX} = "hwloc_"
         $config_defines{HWLOC_SYM_PREFIX_CAPS} = "HWLOC_"
@@ -70,6 +63,37 @@ subcode: config_hwloc
         $config_defines{HWLOC_VERSION_RELEASE} = $v{release}
         $config_defines{HWLOC_VERSION_GREEK} = "\"$v{greek}\""
 
+    subcode: set_config_defines_linux
+        # glibc: which functions the system headers declare
+        $(for:a in FABSF,MODFF,PTHREAD_GETAFFINITY_NP,PTHREAD_SETAFFINITY_NP,SCHED_GETCPU,SNPRINTF,STRTOULL,_SC_NPROCESSORS_CONF,_SC_NPROCESSORS_ONLN,_SC_PAGESIZE,_SC_PAGE_SIZE)
+            $config_defines{HAVE_DECL_$(a)} = 1
+        $(for:a in GETEXECNAME,GETPROGNAME,RUNNING_ON_VALGRIND,_PUTENV,_SC_LARGE_PAGESIZE,_SC_NPROC_CONF,_SC_NPROC_ONLN,_STRDUP)
+            $config_defines{HAVE_DECL_$(a)} = 0
+        $(for:a in FFS,FFSL,GETPAGESIZE,MEMALIGN,OPENAT,POSIX_MEMALIGN,PROGRAM_INVOCATION_NAME,PTHREAD_T,SETLOCALE,SSIZE_T,STRCASECMP,STRFTIME,STRNCASECMP,UNAME,__PROGNAME)
+            $config_defines{HAVE_$(a)} = 1
+        $(for:a in CORRECT_SNPRINTF,CPU_SET,CPU_SET_S,DECL_FFS,DECL_FFSL,DECL_STRCASECMP,DECL_STRNCASECMP,FFS,FFSL,LINUXIO,LINUXPCI,PTHREAD_MUTEX,SCHED_SETAFFINITY,STDINT_H,SYSCALL)
+            $config_defines{HWLOC_HAVE_$(a)} = 1
+        $config_defines{HWLOC_HAVE_ATTRIBUTE_WEAK_ALIAS} = 1
+        $config_defines{HWLOC_LINUX_SYS} = 1
+
+    # macOS (as hwloc's configure finds it on macOS 26): sysctl, mach host
+    # info, the Foundation and IOKit frameworks (mymake adds them to the
+    # MPICH link, see need_hwloc); no affinity, no weak aliases in Mach-O
+    subcode: set_config_defines_darwin
+        $(for:a in FABSF,MODFF,SNPRINTF,STRTOULL,_SC_NPROCESSORS_CONF,_SC_NPROCESSORS_ONLN,_SC_PAGESIZE,_SC_PAGE_SIZE,GETPROGNAME,CTL_HW,HW_NCPU,HW_PHYSMEM,HW_USERMEM,HW_MEMSIZE)
+            $config_defines{HAVE_DECL_$(a)} = 1
+        $(for:a in GETEXECNAME,PTHREAD_GETAFFINITY_NP,PTHREAD_SETAFFINITY_NP,RUNNING_ON_VALGRIND,_PUTENV,_SC_LARGE_PAGESIZE,_SC_NPROC_CONF,_SC_NPROC_ONLN,_STRDUP,HW_MEMSIZE64,HW_PHYSMEM64,HW_REALMEM,HW_REALMEM64,HW_USERMEM64)
+            $config_defines{HAVE_DECL_$(a)} = 0
+        $(for:a in FFS,FFSL,FLS,FLSL,GETPAGESIZE,HOST_INFO,OPENAT,POSIX_MEMALIGN,PTHREAD_T,SETLOCALE,SSIZE_T,STRCASECMP,STRFTIME,STRNCASECMP,SYSCTL,SYSCTLBYNAME,UNAME,__PROGNAME)
+            $config_defines{HAVE_$(a)} = 1
+        $(for:a in CORRECT_SNPRINTF,DARWIN_FOUNDATION,DARWIN_IOKIT,DECL_FFS,DECL_FFSL,DECL_FLS,DECL_FLSL,DECL_STRCASECMP,DECL_STRNCASECMP,FFS,FFSL,FLS,FLSL,PTHREAD_MUTEX,STDINT_H)
+            $config_defines{HWLOC_HAVE_$(a)} = 1
+        # (the generic header probe looks for mach/mach/host.h)
+        $(for:a in MACH_MACH_HOST_H,MACH_MACH_INIT_H,SYS_SYSCTL_H,SYS_PARAM_H)
+            $config_defines{HAVE_$(a)} = 1
+        $config_defines{HWLOC_HAVE_ATTRIBUTE_WEAK_ALIAS} = 0
+        $config_defines{HWLOC_DARWIN_SYS} = 1
+
     # include/hwloc/autogen/config.h: same #undef template style, but the
     # lines inside #if blocks are indented
     subcode: write_public_header
@@ -78,7 +102,8 @@ subcode: config_hwloc
     # the components compiled in (configure collects them from the
     # component m4 files); no plugins, none of the optional ones
     subcode: write_static_components
-        my @components = qw(noos xml synthetic xml_nolibxml linux)
+        my @components = qw(noos xml synthetic xml_nolibxml)
+        push @components, $opts{uname}=~/Darwin/i ? "darwin" : "linux"
         $if $arch=~/^(x86_64|i.86)$/
             push @components, "x86"
         my $static_components = "$d/hwloc/static-components.h"
@@ -127,7 +152,10 @@ fncode: hwloc_dump_template($in, $out)
 subcode: make_hwloc
     my $d = comp_dir("modules/hwloc")
     my %conds
-    $conds{HWLOC_HAVE_LINUX} = 1
+    $if $opts{uname}=~/Darwin/i
+        $conds{HWLOC_HAVE_DARWIN} = 1
+    $else
+        $conds{HWLOC_HAVE_LINUX} = 1
     my $arch = `uname -m`
     chomp $arch
     $if $arch=~/^(x86_64|i.86)$/
