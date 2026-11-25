@@ -246,8 +246,8 @@ subcode: need_ucx
 
     subcode: patch_ucx_need_sed
         $print Patch $ucxdir ...
-        system "find $ucxdir -name '*.la' | xargs sed -i \"s,MODDIR,$ucxdir,g\""
-        system "find $ucxdir -name '*.la*' | xargs sed -i \"s,/MODPREFIX,$opts{prefix},g\""
+        system "find $ucxdir -name '*.la' -exec perl -pi -e 's,MODDIR,$ucxdir,g' {} +"
+        system "find $ucxdir -name '*.la*' -exec perl -pi -e 's,/MODPREFIX,$opts{prefix},g' {} +"
         system "mkdir -p $opts{prefix}/lib/ucx"
         $ENV{LIBRARY_PATH}="$opts{prefix}/lib:$opts{prefix}/lib/ucx:$ENV{LIBRARY_PATH}"
         $foreach $m in "ucm", "ucs", "uct", "ucp"
