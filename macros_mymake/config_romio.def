@@ -52,6 +52,13 @@ subcode: config_romio
         $config_defines{HAVE_DECL_PWRITE} = 1
         $config_defines{HAVE_DECL_MPI_COMBINER_HINDEXED_BLOCK} = 1
 
+        $if $opts{uname}=~/Darwin/i
+            # macOS: statfs is in sys/mount.h and has f_fstypename
+            $(for:a in HAVE_MALLOC_H,HAVE_SYS_VFS_H,HAVE_MEMALIGN,ROMIO_RUN_ON_LINUX)
+                $config_defines{$(a)} = undef
+            $config_defines{HAVE_STRUCT_STATFS_F_TYPE} = 1
+            $config_defines{HAVE_STRUCT_STATFS_F_FSTYPENAME} = 1
+
     subcode: patch_mpio_h
         my %confs
         $confs{DEFINE_HAVE_MPI_GREQUEST} = "#define HAVE_MPI_GREQUEST 1"

@@ -385,6 +385,9 @@ subcode: get_c_features
                 $config_defines{HAVE_$(a)} = undef
             $config_defines{HAVE_ATTR_WEAK_ALIAS} = 1
     $if $opts{uname}=~/Darwin/i
+        # glibc's, not in macOS
+        $(for:a in RANDOM_R,STRUCT_RANDOM_DATA,SCHED_GETAFFINITY,SCHED_SETAFFINITY,CPU_SET_T,CPU_SET_MACROS,PTHREAD_YIELD)
+            $config_defines{HAVE_$(a)} = undef
         $(for:a in PRAGMA_WEAK,PRAGMA_WEAK_ALIAS,MULTIPLE_PRAGMA_WEAK)
             $config_defines{HAVE_$(a)} = undef
         $config_defines{USE_WEAK_SYMBOLS} = undef
