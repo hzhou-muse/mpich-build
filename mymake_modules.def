@@ -66,7 +66,8 @@ subcode: get_sources
     $global %src_dir, %src_key
     my $mpich = $opts{mpich}
     $(for:a in $(module_submodules))
-        $call get_submodule, $(a)
+        $if has_component("$(a)")
+            $call get_submodule, $(a)
     $src_dir{yaksa} = "$mpich/$(yaksa_dir)"
     my $tmp = "$opts{out}/src"
     $src_key{yaksa} = tree_hash($mpich, "$(yaksa_dir)", $tmp)
@@ -148,6 +149,9 @@ subcode: build_components
             system "tail -15 $variant_dir/$c.log"
         die "build failed: @failed\n"
 
+fncode: has_component($c)
+    return grep { $_ eq $c } @components
+
 # what a build of $c is up to date with; `recipe` changes when the way a
 # component is built changes (yaksa: configured by mymake, no autotools)
 fncode: built_key($c)
@@ -203,7 +207,8 @@ subcode: pack_tarball
     my @others = grep { $_ ne "ucx" } @components
     push @others, "modules.stamp"
     system("tar -cf $tar --exclude=.git --exclude=.mymake_built --exclude='*.o' @others") == 0 or die "tar failed\n"
-    system("tar -rf $tar --exclude=.git --exclude=.mymake_built ucx") == 0 or die "tar failed\n"
+    $if has_component("ucx")
+        system("tar -rf $tar --exclude=.git --exclude=.mymake_built ucx") == 0 or die "tar failed\n"
     system("gzip $tar") == 0 or die "gzip failed\n"
     chdir $pwd
     $print "--> $tar.gz"
@@ -213,8 +218,8 @@ subcode: write_modules_stamp
     my %stamp
     $stamp{variant} = $opts{name}
     $stamp{mpich} = `git -C $opts{mpich} rev-parse HEAD`
-    $stamp{cc} = `\${CC:-gcc} --version | head -1`
-    $stamp{fc} = `\${FC:-gfortran} --version | head -1`
+    $stamp{cc} = `\${CC:-gcc} --version 2>/dev/null | head -1`
+    $stamp{fc} = `\${FC:-gfortran} --version 2>/dev/null | head -1`
     $stamp{date} = `date -Iseconds`
     $foreach $k in keys %stamp
         chomp $stamp{$k}

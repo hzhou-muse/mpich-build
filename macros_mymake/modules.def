@@ -72,6 +72,10 @@ subcode: detect_host
     $foreach $d in "/usr", "/usr/local"
         $if !$ze_prefix and -f "$d/include/level_zero/ze_api.h"
             $ze_prefix = $d
+    # UCX supports Linux only
+    $if $^O ne "linux"
+        @components = grep { $_ ne "ucx" } @components
+        $print "  ucx: skipped, Linux only"
 
 # make's job count: none when MAKEFLAGS is set (it has the user's), else
 # -j<opts jobs>, from -j=N (mymake_modules.pl), 8 by default
@@ -140,7 +144,7 @@ subcode: recipe_libfabric
     run("sh autogen.sh")
     run("./configure --enable-embedded --enable-debug $extra")
     run("make " . make_j())
-    run("find . -name '*.la' | xargs sed -i 's, -pthread,,g'")
+    run("find . -name '*.la' -exec perl -pi -e 's, -pthread,,g' {} +")
 
 subcode: recipe_ucx
     # drop the UCG part of Makefile.am, from "if HAVE_UCG" to "EXTRA_DIST +="
@@ -159,7 +163,7 @@ subcode: recipe_ucx
     run("make " . make_j())
     # mymake replaces MODDIR with the unpacked location
     my $dir = getcwd()
-    run("find . -name '*.la' | xargs sed -i 's,$dir,MODDIR,g'")
+    run("find . -name '*.la' -exec perl -pi -e 's,\\Q$dir\\E,MODDIR,g' {} +")
     run("touch need_sed")
 
 subcode: recipe_mydef_boot
@@ -452,7 +456,10 @@ fncode: mymake_inputs($top, $c, $extra, $args_in)
     my $args = defined $args_in ? $args_in : $comp_opts{$c}
     &call open_w, $top/mymake/args
         print Out "$args\n"
-    my %o = (CC => $ENV{CC} || "gcc", CXX => $ENV{CXX} || "g++", FC => $ENV{FC} || "gfortran", quick => 1, %$extra)
+    # uname: the config_*.def that differ by OS read it (opts uname)
+    my $uname = `uname`
+    chomp $uname
+    my %o = (CC => $ENV{CC} || "gcc", CXX => $ENV{CXX} || "g++", FC => $ENV{FC} || "gfortran", quick => 1, uname => $uname, %$extra)
     my $cflags = "-g -O2"
     $foreach $a in split /\s+/, $args
         $if $a=~/^--([\w-]+)=(.*)/
