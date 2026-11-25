@@ -24,7 +24,9 @@ subcode: parse_args
 
     my $uname = `uname`
     $opts{uname} = $uname
-    $if $uname=~/CYGWIN/
+    # no weak symbols (macOS: Mach-O has no #pragma weak aliases; see
+    # get_c_features): libmpi is built again from the sources for the MPI_ names
+    $if $uname=~/CYGWIN|Darwin/
         $opts{do_pmpi} = 1
     $elif $opts{"disable-weak-symbols"}
         $opts{do_pmpi} = 1
