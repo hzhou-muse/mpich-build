@@ -615,6 +615,17 @@ subcode: patch_mpicxx_h
         $confs{MPIR_$(T)} = sprintf("0x4c00%02x$(idx)", $sizeof_hash{"$(T)"})
 
 #---------------------------------------- 
+fncode: get_alignof_max_align_t
+    my ($src, $exe) = (probe_path("maxalign.c"), probe_path("maxalign.out"))
+    &call open_w, $src
+        print Out "#include <stddef.h>\n#include <stdio.h>\n"
+        print Out "int main(void){printf(\"%d\\n\", (int) _Alignof(max_align_t)); return 0;}\n"
+    $if system("$opts{CC} -o $exe $src >/dev/null 2>&1") == 0
+        my $t = `$exe`
+        $if $t=~/^(\d+)/
+            return $1
+    return 0
+
 subcode: get_c_sizeof_mpich
     get_sizeof(["_Bool"], ["stdio.h"]);
     get_sizeof(["__float128"], ["stdio.h"]);
@@ -631,9 +642,10 @@ subcode: get_c_sizeof_mpich
         # 32-bit
         $config_defines{MAX_ALIGNMENT} = 4
     $else
-        # 64-bit
-        $config_defines{MAX_ALIGNMENT} = 16
-        $config_defines{ALIGNOF_MAX_ALIGN_T} = 16
+        # 64-bit: 16 on x86_64 and Linux aarch64, 8 on macOS arm64
+        my $a = get_alignof_max_align_t() || 16
+        $config_defines{MAX_ALIGNMENT} = $a
+        $config_defines{ALIGNOF_MAX_ALIGN_T} = $a
 
     $config_defines{MPIR_Ufint} = "unsigned int"
     my $MPI_AINT
