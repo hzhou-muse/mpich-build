@@ -102,8 +102,9 @@ subcode: config_mpich
                 $if $opts{"with-xpmem"}
                     $temp{MPIDI_CH4_SHM_ENABLE_XPMEM}=1
                     $make_conds{BUILD_SHM_IPC_XPMEM} = 1
-                $if $opts{"without-cma"}
-                    $temp{MPIDI_CH4_SHM_ENABLE_CMA}=0
+                # CMA (process_vm_readv) is Linux only. The sources test
+                # #ifdef MPIDI_CH4_SHM_ENABLE_CMA, so off means not defined
+                $if $opts{"without-cma"} or $opts{uname}!~/Linux/i
                     $make_conds{BUILD_SHM_IPC_CMA} = 0
                 $else
                     $temp{MPIDI_CH4_SHM_ENABLE_CMA} = 1
