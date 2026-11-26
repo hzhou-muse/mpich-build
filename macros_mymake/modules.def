@@ -456,8 +456,8 @@ fncode: mymake_inputs($top, $c, $extra, $args_in)
     my $args = defined $args_in ? $args_in : $comp_opts{$c}
     &call open_w, $top/mymake/args
         print Out "$args\n"
-    # uname: the config_*.def that differ by OS read it
-    my %o = (CC => $ENV{CC} || "gcc", CXX => $ENV{CXX} || "g++", FC => $ENV{FC} || "gfortran", quick => 1, uname => $opts{uname}, %$extra)
+    # uname, arch: the config_*.def that differ by OS or CPU read them
+    my %o = (CC => $ENV{CC} || "gcc", CXX => $ENV{CXX} || "g++", FC => $ENV{FC} || "gfortran", quick => 1, uname => $opts{uname}, arch => $opts{arch}, %$extra)
     my $cflags = "-g -O2"
     $foreach $a in split /\s+/, $args
         $if $a=~/^--([\w-]+)=(.*)/

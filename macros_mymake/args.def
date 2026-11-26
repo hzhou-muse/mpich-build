@@ -19,10 +19,12 @@ subcode: parse_args
     $call parse_ARGV
     $call post_check
     # $map opt_set, moddir, prefix
-    # before set_moddir: check_modules may configure modules (opts uname)
+    # before set_moddir: check_modules may configure modules (opts uname, arch)
     my $uname = `uname`
     chomp $uname
     $opts{uname} = $uname
+    $opts{arch} = `uname -m`
+    chomp $opts{arch}
     $call set_prefix
     $call set_moddir
 
