@@ -33,6 +33,8 @@ subcode: parse_args_modules
     $opts{mpich} = $pwd
     $opts{uname} = `uname`
     chomp $opts{uname}
+    $opts{arch} = `uname -m`
+    chomp $opts{arch}
     $global @extra_args, @variant_args
     $foreach $a in @ARGV
         $if $a=~/^--?(name|mpich|out|only|rebuild)=(.*)/

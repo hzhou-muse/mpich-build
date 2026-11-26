@@ -17,8 +17,6 @@ subcode: config_init_hwloc
 subcode: config_hwloc
     my $d = comp_dir("modules/hwloc")
     my $hversion = hwloc_version("$d/VERSION")
-    my $arch = `uname -m`
-    chomp $arch
     $call ac_init, hwloc, $hversion, https://github.com/open-mpi/hwloc/issues, hwloc, -
     $call set_config_defines
     $call write_public_header
@@ -48,10 +46,10 @@ subcode: config_hwloc
         $config_defines{HWLOC_SYM_PREFIX_CAPS} = "HWLOC_"
         $config_defines{hwloc_pid_t} = "pid_t"
         $config_defines{hwloc_thread_t} = "pthread_t"
-        $if $arch eq "x86_64"
+        $if $opts{arch} eq "x86_64"
             $config_defines{HWLOC_X86_64_ARCH} = 1
             $config_defines{HWLOC_HAVE_X86_CPUID} = 1
-        $elif $arch=~/^i.86$/
+        $elif $opts{arch}=~/^i.86$/
             $config_defines{HWLOC_X86_32_ARCH} = 1
             $config_defines{HWLOC_HAVE_X86_CPUID} = 1
 
@@ -104,7 +102,7 @@ subcode: config_hwloc
     subcode: write_static_components
         my @components = qw(noos xml synthetic xml_nolibxml)
         push @components, $opts{uname}=~/Darwin/i ? "darwin" : "linux"
-        $if $arch=~/^(x86_64|i.86)$/
+        $if $opts{arch}=~/^(x86_64|i.86)$/
             push @components, "x86"
         my $static_components = "$d/hwloc/static-components.h"
         &call open_w, $static_components
@@ -156,9 +154,7 @@ subcode: make_hwloc
         $conds{HWLOC_HAVE_DARWIN} = 1
     $else
         $conds{HWLOC_HAVE_LINUX} = 1
-    my $arch = `uname -m`
-    chomp $arch
-    $if $arch=~/^(x86_64|i.86)$/
+    $if $opts{arch}=~/^(x86_64|i.86)$/
         $conds{HWLOC_HAVE_X86_CPUID} = 1
     # Makefile is in hwloc/: the libtool script and the includes are one up
     $make_vars{LIBTOOL} = "../libtool"

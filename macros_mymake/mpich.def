@@ -226,8 +226,7 @@ subcode: mpich_configure
 
     # -------------------
     subcode: hack_MPI_OFFSET
-        my $t = `uname -m`
-        $if $t=~/x86_64/
+        $if $opts{arch}=~/x86_64/
             $ENV{FORTRAN_MPI_OFFSET}="integer*8"
     subcode: get_mpl_flags
         $ENV{COMPILER_TLS}="_Thread_local"
