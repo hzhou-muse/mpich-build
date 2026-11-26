@@ -19,11 +19,13 @@ subcode: parse_args
     $call parse_ARGV
     $call post_check
     # $map opt_set, moddir, prefix
+    # before set_moddir: check_modules may configure modules (opts uname)
+    my $uname = `uname`
+    chomp $uname
+    $opts{uname} = $uname
     $call set_prefix
     $call set_moddir
 
-    my $uname = `uname`
-    $opts{uname} = $uname
     # no weak symbols (macOS: Mach-O has no #pragma weak aliases; see
     # get_c_features): libmpi is built again from the sources for the MPI_ names
     $if $uname=~/CYGWIN|Darwin/
