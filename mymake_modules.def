@@ -31,6 +31,8 @@ page: mymake_modules
 subcode: parse_args_modules
     $opts{name} = "cpu"
     $opts{mpich} = $pwd
+    $opts{uname} = `uname`
+    chomp $opts{uname}
     $global @extra_args, @variant_args
     $foreach $a in @ARGV
         $if $a=~/^--?(name|mpich|out|only|rebuild)=(.*)/

@@ -73,7 +73,7 @@ subcode: detect_host
         $if !$ze_prefix and -f "$d/include/level_zero/ze_api.h"
             $ze_prefix = $d
     # UCX supports Linux only
-    $if $^O ne "linux"
+    $if $opts{uname}!~/Linux/i
         @components = grep { $_ ne "ucx" } @components
         $print "  ucx: skipped, Linux only"
 
@@ -456,10 +456,8 @@ fncode: mymake_inputs($top, $c, $extra, $args_in)
     my $args = defined $args_in ? $args_in : $comp_opts{$c}
     &call open_w, $top/mymake/args
         print Out "$args\n"
-    # uname: the config_*.def that differ by OS read it (opts uname)
-    my $uname = `uname`
-    chomp $uname
-    my %o = (CC => $ENV{CC} || "gcc", CXX => $ENV{CXX} || "g++", FC => $ENV{FC} || "gfortran", quick => 1, uname => $uname, %$extra)
+    # uname: the config_*.def that differ by OS read it
+    my %o = (CC => $ENV{CC} || "gcc", CXX => $ENV{CXX} || "g++", FC => $ENV{FC} || "gfortran", quick => 1, uname => $opts{uname}, %$extra)
     my $cflags = "-g -O2"
     $foreach $a in split /\s+/, $args
         $if $a=~/^--([\w-]+)=(.*)/
